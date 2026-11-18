@@ -1,0 +1,21 @@
+# Bỏ qua khi build Docker (context = thư mục gốc repo)
+.git
+.gitignore
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.env
+**/.env.local
+api/data
+api/uploads
+**/.run
+e2e/screenshots
+e2e/test-results
+e2e/playwright-report
+tools
+sample
+*.md
+!README.md

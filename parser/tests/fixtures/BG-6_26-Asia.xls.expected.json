@@ -1,0 +1,36 @@
+{
+  "buyer_name": "CÔNG TY TNHH THƯƠNG MẠI MÔI TRƯỜNG ASIA",
+  "buyer_name_confidence": "high",
+  "buyer_tax_code": "",
+  "buyer_tax_code_confidence": "low",
+  "quote_no": "TR-0306-26/Asia-QM",
+  "quote_no_confidence": "high",
+  "quote_date": "2026-06-03",
+  "quote_date_confidence": "high",
+  "sender_name": "Hà Thị Trang",
+  "receiver_name": "Mr. Ý",
+  "lines": [
+    {
+      "line_no": 1,
+      "name": "BƠM HOÁ CHẤT",
+      "unit": "Cái",
+      "qty": 6.0,
+      "unit_price": 10750000,
+      "amount": 64500000,
+      "model": "1M50P1155SVBSMV0M3-001",
+      "brand": "OBL - Ý",
+      "origin": "",
+      "spec_text": "Hãng SX: OBL - Ý\nModel: 1M50P1155SVBSMV0M3-001\n(Model cũ: M50 PPSV)\nLoại bơm định lượng màng.\nThông số làm việc:\n- Lưu lượng: Qmax = 50 lít/h.\n- Áp suất: Hmax = 12 bar.\n- Công suất: 0.25 kW\n- Điện áp: 3 pha/400V/50Hz\n- Cấp bảo vệ động cơ: IP55\n- Cấp cách điện: Class F\n- Đầu bơm: PP\n- Màng bơm: PTFE",
+      "confidence": "high"
+    }
+  ],
+  "declared_subtotal": 64500000,
+  "declared_vat": 5160000,
+  "declared_total": 69660000,
+  "tax_rate": 0.08,
+  "payment_terms": "Chuyển khoản",
+  "validity_days": 15,
+  "warnings": [
+    "Không tìm thấy mã số thuế người mua"
+  ]
+}

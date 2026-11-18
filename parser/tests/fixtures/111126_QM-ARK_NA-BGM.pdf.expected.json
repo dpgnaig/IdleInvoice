@@ -1,0 +1,34 @@
+{
+  "buyer_name": "CÔNG TY TNHH ARK VIỆT NAM",
+  "buyer_name_confidence": "high",
+  "buyer_tax_code": "2400573873",
+  "buyer_tax_code_confidence": "high",
+  "quote_no": "111126/QM-ARK/NA-BGM",
+  "quote_no_confidence": "high",
+  "quote_date": "2026-11-11",
+  "quote_date_confidence": "high",
+  "sender_name": "Đặng Ngọc Ánh",
+  "receiver_name": "Mr Trúc",
+  "lines": [
+    {
+      "line_no": 1,
+      "name": "BƠM HOÁ CHẤT",
+      "unit": "Cái",
+      "qty": 2.0,
+      "unit_price": 11200000,
+      "amount": 22400000,
+      "model": "1M120P1115SVBSMV0M3-001",
+      "brand": "OBL - Ý",
+      "origin": "",
+      "spec_text": "Hãng SX: OBL - Ý\nModel: 1M120P1115SVBSMV0M3-001\n- Lưu lượng: 0 - 120 lít/h.\n- Áp lực: 10 bar\n- Công suất: 0.25 kw/380V/50Hz\n- Đầu bơm: PP\n- Màng bơm: PTFE\n- Van seat và van bi: PVC/Pyrex\n- Loại bơm màng.",
+      "confidence": "high"
+    }
+  ],
+  "declared_subtotal": 22400000,
+  "declared_vat": 1792000,
+  "declared_total": 24192000,
+  "tax_rate": 0.08,
+  "payment_terms": "Chuyển khoản",
+  "validity_days": 15,
+  "warnings": []
+}

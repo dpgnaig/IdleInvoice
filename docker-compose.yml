@@ -1,0 +1,61 @@
+name: idleinvoice
+
+services:
+  parser:
+    build:
+      context: ./parser
+    environment:
+      - INTERNAL_KEY=${INTERNAL_KEY:?INTERNAL_KEY is required}
+      - MAX_FILE_MB=${MAX_FILE_MB:-10}
+      - LLM_FALLBACK_ENABLED=${LLM_FALLBACK_ENABLED:-false}
+    expose:
+      - "8001"
+    networks:
+      - internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    depends_on:
+      parser:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_PATH=/data/app.db
+      - UPLOAD_DIR=/app/uploads
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
+      - INTERNAL_KEY=${INTERNAL_KEY:?INTERNAL_KEY is required}
+      - PARSER_URL=http://parser:8001
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
+      - REGISTRATION_MODE=${REGISTRATION_MODE:-approval}
+      - SERVE_WEB=true
+      - TAX_LOOKUP_ENABLED=${TAX_LOOKUP_ENABLED:-false}
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - appdata:/data
+      - uploads:/app/uploads
+    networks:
+      - internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  appdata:
+  uploads:
+
+networks:
+  internal:

@@ -1,0 +1,85 @@
+# ============================================================
+# IdleInvoice — file bỏ qua khi commit
+# Nguyên tắc: KHÔNG commit secret, dữ liệu chạy thật, file sinh tự động.
+# ============================================================
+
+# ---------- Secret & cấu hình máy ----------
+# .env chứa JWT secret, INTERNAL_KEY thật -> tuyệt đối không commit
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Giữ file mẫu để người mới biết cần khai báo biến gì
+!.env.example
+
+# ---------- Dữ liệu chạy dev (./scripts, .run) ----------
+# .run/api.env chứa secret thật; .db/.db-wal/.db-shm là dữ liệu thật;
+# uploads/ là file báo giá khách hàng tải lên
+.run/
+uploads/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ---------- Node ----------
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# tsc sinh .js cạnh .tsx trong web/src (build web chạy tsc trước vite).
+# Vite sẽ đọc nhầm các file này thay vì .tsx -> không bao giờ commit.
+# Nếu sau này cần thêm file .js viết tay vào web/src, khai báo ngoại lệ ở đây.
+/web/src/**/*.js
+
+# ---------- Python ----------
+.venv/
+venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# ---------- Kiểm thử e2e ----------
+# Ảnh chụp và file tải về được tạo lại mỗi lần chạy test
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/
+e2e/screenshots/
+
+# ---------- Log ----------
+*.log
+
+# ---------- Trình soạn thảo / hệ điều hành ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ============================================================
+# LƯU Ý — file ĐANG được track (không đưa vào ignore):
+#
+#   sample/                     báo giá + danh mục mẫu dùng cho e2e và demo
+#   parser/tests/fixtures/      cùng các file trên + .expected.json cho pytest
+#
+# Hai thư mục này chứa dữ liệu thật của khách hàng (tên công ty, MST, giá).
+# Chỉ commit/push khi repo là private và được phép lưu dữ liệu đó.
+# Nếu đưa lên remote công khai, thay bằng dữ liệu giả cùng cấu trúc cột
+# và cập nhật lại các file .expected.json.
+# ============================================================
