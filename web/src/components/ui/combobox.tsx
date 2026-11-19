@@ -44,6 +44,7 @@ export function Combobox({
   const [active, setActive] = React.useState(0);
   const [rect, setRect] = React.useState<DOMRect | null>(null);
   const btnRef = React.useRef<HTMLButtonElement>(null);
+  const listRef = React.useRef<HTMLUListElement>(null);
   const reduce = useReducedMotion();
 
   const selected = options.find((o) => o.value === value);
@@ -58,8 +59,36 @@ export function Combobox({
   }, [options, query, onSearch]);
 
   React.useEffect(() => {
-    if (open) setRect(btnRef.current?.getBoundingClientRect() ?? null);
+    if (!open) return;
+    // Bám theo ô chọn khi trang/khung cha cuộn hoặc đổi kích thước (giống Radix Popover)
+    let frame = 0;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const r = btnRef.current?.getBoundingClientRect();
+        if (!r) return;
+        // Ô chọn đã cuộn khuất hẳn khỏi màn hình -> đóng thay vì treo popup lơ lửng
+        if (r.bottom < 0 || r.top > window.innerHeight) setOpen(false);
+        else setRect(r);
+      });
+    };
+    update();
+    window.addEventListener('scroll', update, true); // capture: bắt cả cuộn của khung cha
+    window.addEventListener('resize', update);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
   }, [open]);
+
+  // Dùng phím ↑↓ thì cuộn mục đang chọn vào vùng nhìn thấy
+  React.useEffect(() => {
+    if (!open) return;
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-index="${active}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [active, open]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -116,29 +145,44 @@ export function Combobox({
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onKeyDown}
         className={cn(
-          'input flex w-full items-center justify-between gap-2 text-left',
+          'flex h-9 w-full items-center justify-between gap-2 whitespace-nowrap rounded-md border border-input bg-background px-3 py-2 text-left text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50',
           !selected && 'text-muted-foreground',
           className,
         )}
       >
         <span className="truncate">{selected ? selected.label : placeholder}</span>
-        <ChevronDown className={cn('h-4 w-4 shrink-0 transition-transform', open && 'rotate-180')} />
+        <ChevronDown className={cn('h-4 w-4 shrink-0 opacity-50 transition-transform', open && 'rotate-180')} />
       </button>
 
       {createPortal(
         <AnimatePresence>
-          {open && rect && (
+          {open && rect && (() => {
+            // Bên dưới không đủ chỗ thì lật lên trên; danh sách cao tối đa 256px hoặc bằng khoảng trống còn lại
+            const GAP = 4;
+            const SEARCH_H = 37; // ô tìm kiếm h-9 + viền dưới
+            const spaceBelow = window.innerHeight - rect.bottom - GAP - 8;
+            const spaceAbove = rect.top - GAP - 8;
+            const placeTop = spaceBelow < 200 && spaceAbove > spaceBelow;
+            const listMax = Math.max(120, Math.min(256, (placeTop ? spaceAbove : spaceBelow) - SEARCH_H - 2));
+            return (
             <motion.div
               id={`combobox-pop-${id ?? 'x'}`}
-              className="fixed z-[60] overflow-hidden rounded-xl border bg-card shadow-lift"
-              style={{ top: rect.bottom + 6, left: rect.left, width: rect.width, maxWidth: '92vw' }}
-              initial={reduce ? { opacity: 0 } : { opacity: 0, y: -4, scale: 0.99 }}
-              animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
-              exit={reduce ? { opacity: 0 } : { opacity: 0, y: -2 }}
-              transition={{ duration: 0.14 }}
+              className="fixed z-[60] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md"
+              style={{
+                ...(placeTop
+                  ? { bottom: window.innerHeight - rect.top + GAP }
+                  : { top: rect.bottom + GAP }),
+                left: rect.left,
+                width: rect.width,
+                maxWidth: '92vw',
+              }}
+              initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.98 }}
+              animate={reduce ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.12 }}
             >
-              <div className="flex items-center gap-2 border-b px-3 py-2">
-                <Search className="h-3.5 w-3.5 text-muted-foreground" />
+              <div className="flex h-9 items-center gap-2 border-b px-3">
+                <Search className="h-4 w-4 shrink-0 opacity-50" />
                 <input
                   autoFocus
                   value={query}
@@ -150,25 +194,31 @@ export function Combobox({
                   onKeyDown={onKeyDown}
                   placeholder={searchPlaceholder}
                   aria-label={searchPlaceholder}
-                  className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  className="h-full w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-0"
                 />
               </div>
-              <ul role="listbox" className="max-h-64 overflow-auto p-1">
+              <ul
+                ref={listRef}
+                role="listbox"
+                // overscroll-contain: cuộn tới cuối danh sách không kéo theo cả trang
+                className="overflow-y-auto overscroll-contain p-1"
+                style={{ maxHeight: listMax }}
+              >
                 {loading && (
-                  <li className="px-3 py-2 text-sm text-muted-foreground">Đang tải…</li>
+                  <li className="px-2 py-1.5 text-sm text-muted-foreground">Đang tải…</li>
                 )}
                 {!loading && filtered.length === 0 && (
-                  <li className="px-3 py-6 text-center text-sm text-muted-foreground">{emptyText}</li>
+                  <li className="px-2 py-6 text-center text-sm text-muted-foreground">{emptyText}</li>
                 )}
                 {filtered.map((o, i) => (
-                  <li key={o.value} role="option" aria-selected={o.value === value}>
+                  <li key={o.value} role="option" aria-selected={o.value === value} data-index={i}>
                     <button
                       type="button"
                       onMouseEnter={() => setActive(i)}
                       onClick={() => choose(o)}
                       className={cn(
-                        'flex w-full items-start justify-between gap-3 rounded-lg px-2.5 py-2 text-left text-sm',
-                        i === active && 'bg-muted',
+                        'flex w-full items-start justify-between gap-3 rounded-sm px-2 py-1.5 text-left text-sm',
+                        i === active && 'bg-accent text-accent-foreground',
                       )}
                     >
                       <span className="min-w-0">
@@ -183,7 +233,8 @@ export function Combobox({
                 ))}
               </ul>
             </motion.div>
-          )}
+            );
+          })()}
         </AnimatePresence>,
         document.body,
       )}

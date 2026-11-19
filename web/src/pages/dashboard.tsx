@@ -4,6 +4,8 @@ import { FileText, History, Package, Upload, Users } from 'lucide-react';
 import { api } from '@/lib/api';
 import { PageHeader, StatCard } from '@/components/layout/page-header';
 import { CountUpMoney } from '@/components/ui/count-up';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatMoney } from '@/lib/utils';
 
 export default function DashboardPage() {
@@ -41,9 +43,11 @@ export default function DashboardPage() {
         title="Tổng quan"
         description="Tình hình báo giá và hóa đơn trong hệ thống."
         actions={
-          <Link to="/quotes/import" className="btn-primary">
-            <Upload className="h-4 w-4" /> Nhập báo giá
-          </Link>
+          <Button asChild>
+            <Link to="/quotes/import">
+              <Upload /> Nhập báo giá
+            </Link>
+          </Button>
         }
       />
 
@@ -61,42 +65,50 @@ export default function DashboardPage() {
       </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        <div className="card-surface p-5">
-          <h2 className="text-sm font-semibold">Hóa đơn nháp gần đây</h2>
-          {(invoices.data?.data ?? []).slice(0, 6).map((i) => (
-            <div key={i.id} className="flex items-center justify-between border-b py-2.5 last:border-0 text-sm">
-              <span className="truncate">{i.customerName}</span>
-              <span className="tabular-nums text-muted-foreground">{formatMoney(i.subtotal)}</span>
-            </div>
-          ))}
-          {draftCount === 0 && <p className="py-6 text-sm text-muted-foreground">Chưa có hóa đơn nháp.</p>}
-          <Link to="/invoices" className="mt-3 inline-block text-sm font-medium text-primary hover:underline">
-            Xem tất cả hóa đơn
-          </Link>
-        </div>
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm">Hóa đơn nháp gần đây</CardTitle>
+            <Button variant="link" size="sm" asChild>
+              <Link to="/invoices">Xem tất cả hóa đơn</Link>
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {(invoices.data?.data ?? []).slice(0, 6).map((i) => (
+              <div key={i.id} className="flex items-center justify-between gap-4 border-b py-2.5 last:border-0 text-sm">
+                <span className="truncate">{i.customerName}</span>
+                <span className="tabular-nums text-muted-foreground">{formatMoney(i.subtotal)}</span>
+              </div>
+            ))}
+            {draftCount === 0 && <p className="py-6 text-sm text-muted-foreground">Chưa có hóa đơn nháp.</p>}
+          </CardContent>
+        </Card>
 
-        <div className="card-surface p-5">
-          <h2 className="text-sm font-semibold">Báo giá gần đây</h2>
-          {(quotes.data?.data ?? []).map((q) => (
-            <div key={q.id} className="flex items-center justify-between border-b py-2.5 last:border-0 text-sm">
-              <span className="truncate font-mono text-xs">{q.quoteNo}</span>
-              <span className="truncate text-muted-foreground">{q.customerName}</span>
-            </div>
-          ))}
-          {(quotes.data?.data ?? []).length === 0 && (
-            <p className="py-6 text-sm text-muted-foreground">Chưa đọc báo giá nào.</p>
-          )}
-          <Link to="/quotes" className="mt-3 inline-block text-sm font-medium text-primary hover:underline">
-            Lịch sử báo giá
-          </Link>
-        </div>
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm">Báo giá gần đây</CardTitle>
+            <Button variant="link" size="sm" asChild>
+              <Link to="/quotes">Lịch sử báo giá</Link>
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {(quotes.data?.data ?? []).map((q) => (
+              <div key={q.id} className="flex items-center justify-between gap-4 border-b py-2.5 last:border-0 text-sm">
+                <span className="truncate font-mono text-xs">{q.quoteNo}</span>
+                <span className="truncate text-muted-foreground">{q.customerName}</span>
+              </div>
+            ))}
+            {(quotes.data?.data ?? []).length === 0 && (
+              <p className="py-6 text-sm text-muted-foreground">Chưa đọc báo giá nào.</p>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {draftTotal > 0 && (
-        <div className="card-surface mt-4 flex items-center justify-between p-5">
+        <Card className="mt-4 flex items-center justify-between p-5">
           <span className="text-sm text-muted-foreground">Tổng tiền hàng đang chờ xuất</span>
           <CountUpMoney value={draftTotal} className="text-xl font-semibold text-primary" />
-        </div>
+        </Card>
       )}
     </div>
   );

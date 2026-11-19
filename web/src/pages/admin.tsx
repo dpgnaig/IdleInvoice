@@ -1,13 +1,18 @@
-import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { ScrollText, Shield } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/layout/page-header';
-import { Pagination } from './customers';
-import { cn, formatDate } from '@/lib/utils';
+import { SegmentedControl } from '@/components/ui/toolbar';
+import { Pagination } from '@/components/ui/pagination';
+import { useAutoPageSize } from '@/lib/use-auto-page-size';
+import { formatDate } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { NativeSelect } from '@/components/ui/native-select';
 
 interface AdminUser {
   id: number;
@@ -32,24 +37,41 @@ export default function AdminPage() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<'users' | 'logs'>('users');
   const [page, setPage] = useState(1);
+  const { ref: tableRef, pageSize } = useAutoPageSize();
+  // Số dòng/trang đổi theo kích thước cửa sổ -> quay về trang 1 để không vượt quá số trang
+  useEffect(() => setPage(1), [pageSize]);
 
   const users = useQuery({
-    queryKey: ['admin-users', page],
+    queryKey: ['admin-users', page, pageSize],
+    placeholderData: keepPreviousData,
     queryFn: async () => {
-      const { data } = await api.get('/admin/users', { params: { page, pageSize: 20 } });
-      return data as { data: AdminUser[]; pagination: { totalPages: number } };
+      const { data } = await api.get('/admin/users', { params: { page, pageSize } });
+      return data as { data: AdminUser[]; pagination: { totalPages: number; total: number } };
     },
     enabled: tab === 'users',
   });
 
   const logs = useQuery({
-    queryKey: ['admin-logs', page],
+    queryKey: ['admin-logs', page, pageSize],
+    placeholderData: keepPreviousData,
     queryFn: async () => {
-      const { data } = await api.get('/admin/audit-logs', { params: { page, pageSize: 50 } });
-      return data as { data: AuditRow[]; pagination: { totalPages: number } };
+      const { data } = await api.get('/admin/audit-logs', { params: { page, pageSize } });
+      return data as { data: AuditRow[]; pagination: { totalPages: number; total: number } };
     },
     enabled: tab === 'logs',
   });
+
+  const tabs = (
+    <SegmentedControl
+      ariaLabel="Chọn mục quản trị"
+      value={tab}
+      onChange={(v) => { setTab(v); setPage(1); }}
+      options={[
+        { value: 'users', label: 'Người dùng', icon: <Shield className="h-3.5 w-3.5" /> },
+        { value: 'logs', label: 'Nhật ký', icon: <ScrollText className="h-3.5 w-3.5" /> },
+      ]}
+    />
+  );
 
   const patch = useMutation({
     mutationFn: async ({ id, body }: { id: number; body: Record<string, string> }) =>
@@ -63,116 +85,109 @@ export default function AdminPage() {
 
   const userColumns: Column<AdminUser>[] = [
     { key: 'name', header: 'Họ tên', render: (r) => <span className="font-medium">{r.fullName}</span> },
-    { key: 'email', header: 'Email', render: (r) => <span className="text-muted-foreground">{r.email}</span> },
-    { key: 'role', header: 'Vai trò', render: (r) => (r.role === 'admin' ? 'Quản trị' : 'Kế toán') },
+    { key: 'email', width: '260px', header: 'Email', render: (r) => <span className="text-muted-foreground">{r.email}</span> },
+    { key: 'role', width: '120px', header: 'Vai trò', render: (r) => (r.role === 'admin' ? 'Quản trị' : 'Kế toán') },
     {
-      key: 'status',
+      key: 'status', width: '130px',
       header: 'Trạng thái',
       render: (r) => (
-        <span
-          className={cn(
-            'badge',
-            r.status === 'active' && 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
-            r.status === 'pending' && 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
-            r.status === 'locked' && 'bg-destructive/10 text-destructive',
-          )}
-        >
+        <Badge variant={r.status === 'active' ? 'success' : r.status === 'pending' ? 'warning' : 'destructive'}>
           {r.status === 'active' ? 'Hoạt động' : r.status === 'pending' ? 'Chờ duyệt' : 'Đã khóa'}
-        </span>
+        </Badge>
       ),
     },
-    { key: 'createdAt', header: 'Ngày tạo', render: (r) => formatDate(r.createdAt) },
+    { key: 'createdAt', width: '130px', header: 'Ngày tạo', render: (r) => formatDate(r.createdAt) },
     {
-      key: 'actions',
+      key: 'actions', width: '200px',
       header: '',
       align: 'right',
       render: (r) => (
-        <div className="flex flex-wrap justify-end gap-1.5">
+        <div className="flex justify-end gap-1">
           {r.status === 'pending' && (
-            <button className="btn-primary h-7 px-2.5 text-xs" onClick={() => patch.mutate({ id: r.id, body: { status: 'active' } })}>
+            <Button size="sm" onClick={() => patch.mutate({ id: r.id, body: { status: 'active' } })}>
               Duyệt
-            </button>
+            </Button>
           )}
           {r.status === 'active' && (
-            <button className="btn-outline h-7 px-2.5 text-xs" onClick={() => patch.mutate({ id: r.id, body: { status: 'locked' } })}>
+            <Button variant="outline" size="sm" onClick={() => patch.mutate({ id: r.id, body: { status: 'locked' } })}>
               Khóa
-            </button>
+            </Button>
           )}
           {r.status === 'locked' && (
-            <button className="btn-outline h-7 px-2.5 text-xs" onClick={() => patch.mutate({ id: r.id, body: { status: 'active' } })}>
+            <Button variant="outline" size="sm" onClick={() => patch.mutate({ id: r.id, body: { status: 'active' } })}>
               Mở khóa
-            </button>
+            </Button>
           )}
-          <select
+          <NativeSelect
             aria-label="Đổi vai trò"
             value={r.role}
             onChange={(e) => patch.mutate({ id: r.id, body: { role: e.target.value } })}
-            className="input h-7 w-auto px-2 text-xs"
+            className="w-24"
+            selectClassName="h-8 text-xs"
           >
             <option value="accountant">Kế toán</option>
             <option value="admin">Quản trị</option>
-          </select>
+          </NativeSelect>
         </div>
       ),
     },
   ];
 
   const logColumns: Column<AuditRow>[] = [
-    { key: 'createdAt', header: 'Thời gian', render: (r) => formatDate(r.createdAt) },
-    { key: 'action', header: 'Thao tác', render: (r) => <span className="font-mono text-xs">{r.action}</span> },
-    { key: 'entity', header: 'Đối tượng', render: (r) => `${r.entity} #${r.entityId}` },
-    { key: 'userId', header: 'Người dùng', render: (r) => (r.userId ? `#${r.userId}` : 'hệ thống') },
-    { key: 'detail', header: 'Chi tiết', render: (r) => <span className="line-clamp-1 max-w-[380px] text-xs text-muted-foreground">{r.detailJson}</span> },
+    { key: 'createdAt', width: '130px', header: 'Thời gian', render: (r) => formatDate(r.createdAt) },
+    { key: 'action', width: '200px', header: 'Thao tác', render: (r) => <span className="font-mono text-xs">{r.action}</span> },
+    { key: 'entity', width: '180px', header: 'Đối tượng', render: (r) => `${r.entity} #${r.entityId}` },
+    { key: 'userId', width: '120px', header: 'Người dùng', render: (r) => (r.userId ? `#${r.userId}` : 'hệ thống') },
+    { key: 'detail', header: 'Chi tiết', render: (r) => <span className="text-xs text-muted-foreground" title={r.detailJson}>{r.detailJson}</span> },
   ];
 
   return (
     <div>
       <PageHeader title="Quản trị" description="Quản lý người dùng và nhật ký thao tác." />
-      <div className="mb-4 flex rounded-xl border p-0.5 w-fit" role="tablist">
-        <button
-          role="tab"
-          aria-selected={tab === 'users'}
-          onClick={() => { setTab('users'); setPage(1); }}
-          className={cn('flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm', tab === 'users' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground')}
-        >
-          <Shield className="h-4 w-4" /> Người dùng
-        </button>
-        <button
-          role="tab"
-          aria-selected={tab === 'logs'}
-          onClick={() => { setTab('logs'); setPage(1); }}
-          className={cn('flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm', tab === 'logs' ? 'bg-accent text-accent-foreground' : 'text-muted-foreground')}
-        >
-          <ScrollText className="h-4 w-4" /> Nhật ký
-        </button>
-      </div>
-
       {tab === 'users' ? (
-        <>
-          <DataTable
-            rows={users.data?.data ?? []}
-            columns={userColumns}
-            rowKey={(r) => r.id}
-            loading={users.isLoading}
-            empty={<EmptyState title="Không có người dùng" />}
-          />
-          {users.data && users.data.pagination.totalPages > 1 && (
-            <Pagination page={page} totalPages={users.data.pagination.totalPages} onChange={setPage} />
-          )}
-        </>
+        <DataTable
+          cardRef={tableRef}
+          toolbar={tabs}
+          footer={
+            <Pagination
+              page={page}
+              totalPages={users.data?.pagination.totalPages ?? 1}
+              total={users.data?.pagination.total}
+              pageSize={pageSize}
+              unit="người dùng"
+              onChange={setPage}
+            />
+          }
+          rows={users.data?.data ?? []}
+          pageSize={pageSize}
+          fetching={users.isPlaceholderData}
+          columns={userColumns}
+          rowKey={(r) => r.id}
+          loading={users.isLoading}
+          empty={<EmptyState title="Không có người dùng" />}
+        />
       ) : (
-        <>
-          <DataTable
-            rows={logs.data?.data ?? []}
-            columns={logColumns}
-            rowKey={(r) => r.id}
-            loading={logs.isLoading}
-            empty={<EmptyState title="Chưa có nhật ký" />}
-          />
-          {logs.data && logs.data.pagination.totalPages > 1 && (
-            <Pagination page={page} totalPages={logs.data.pagination.totalPages} onChange={setPage} />
-          )}
-        </>
+        <DataTable
+          cardRef={tableRef}
+          toolbar={tabs}
+          footer={
+            <Pagination
+              page={page}
+              totalPages={logs.data?.pagination.totalPages ?? 1}
+              total={logs.data?.pagination.total}
+              pageSize={pageSize}
+              unit="bản ghi"
+              onChange={setPage}
+            />
+          }
+          rows={logs.data?.data ?? []}
+          pageSize={pageSize}
+          fetching={logs.isPlaceholderData}
+          columns={logColumns}
+          rowKey={(r) => r.id}
+          loading={logs.isLoading}
+          empty={<EmptyState title="Chưa có nhật ký" />}
+        />
       )}
     </div>
   );

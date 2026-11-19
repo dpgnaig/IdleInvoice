@@ -134,8 +134,14 @@ setupRouter.post(
     const existingCodes = new Set(
       db.select({ c: products.code }).from(products).all().map((r) => r.c.toUpperCase()),
     );
-    const dupInDb = customerParsed.rows.filter((r) => existingTax.has(r.taxCode)).length;
-    const dupProductInDb = productParsed.rows.filter((r) => existingCodes.has(r.code.toUpperCase())).length;
+    // Gắn cờ "đã có trong DB" cho từng dòng — trả về đủ mọi dòng (kể cả lỗi/trùng)
+    // để giao diện hiển thị và tô sáng toàn bộ file đã đọc.
+    const customerRows = customerParsed.rows.map((r) => ({ ...r, duplicateInDb: existingTax.has(r.taxCode) }));
+    const productRows = productParsed.rows.map((r) => ({ ...r, duplicateInDb: existingCodes.has(r.code.toUpperCase()) }));
+    const dupInDb = customerRows.filter((r) => r.duplicateInDb).length;
+    const dupProductInDb = productRows.filter((r) => r.duplicateInDb).length;
+    const customerAddable = customerRows.filter((r) => r.status === 'ok' && !r.duplicateInDb).length;
+    const productAddable = productRows.filter((r) => r.status === 'ok' && !r.duplicateInDb).length;
 
     // Lưu file để bước commit không phụ thuộc trình duyệt còn mở hay không.
     const id = crypto.randomUUID();
@@ -145,21 +151,25 @@ setupRouter.post(
       uploadId: id,
       fileName: req.file.originalname,
       customers: {
-        total: customerParsed.rows.length,
-        valid: customerParsed.rows.length - dupInDb,
+        total: customerRows.length,
+        valid: customerAddable,
         duplicateInFile: customerParsed.duplicateCount,
         duplicateInDb: dupInDb,
-        sample: customerParsed.rows.slice(0, 10),
-        issues: customerParsed.issues.slice(0, 200),
+        invalid: customerRows.filter((r) => r.status === 'invalid').length,
+        rows: customerRows,
+        sample: customerRows.slice(0, 10),
+        issues: customerParsed.issues.slice(0, 500),
         issueCount: customerParsed.issues.length,
       },
       products: {
-        total: productParsed.rows.length,
-        valid: productParsed.rows.length - dupProductInDb,
+        total: productRows.length,
+        valid: productAddable,
         duplicateInFile: productParsed.duplicateCount,
         duplicateInDb: dupProductInDb,
-        sample: productParsed.rows.slice(0, 10),
-        issues: productParsed.issues.slice(0, 200),
+        invalid: productRows.filter((r) => r.status === 'invalid').length,
+        rows: productRows,
+        sample: productRows.slice(0, 10),
+        issues: productParsed.issues.slice(0, 500),
         issueCount: productParsed.issues.length,
       },
     });
@@ -197,6 +207,7 @@ setupRouter.post(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'IMPORT')`,
       );
       for (const c of customerParsed.rows) {
+        if (c.status !== 'ok') continue;
         const r = insertCustomer.run(now, now, c.taxCode, c.name, c.address, c.email, c.buyerName, c.idCard, c.bankAccount, c.budgetUnitCode);
         customersAdded += r.changes;
       }
@@ -204,6 +215,7 @@ setupRouter.post(
         `INSERT OR IGNORE INTO products (created_at, updated_at, code, name, unit) VALUES (?, ?, ?, ?, ?)`,
       );
       for (const p of productParsed.rows) {
+        if (p.status !== 'ok') continue;
         const r = insertProduct.run(now, now, p.code, p.name, p.unit);
         productsAdded += r.changes;
       }
@@ -221,8 +233,8 @@ setupRouter.post(
       ok: true,
       customersAdded,
       productsAdded,
-      customersSkipped: customerParsed.rows.length - customersAdded + customerParsed.duplicateCount,
-      productsSkipped: productParsed.rows.length - productsAdded + productParsed.duplicateCount,
+      customersSkipped: customerParsed.rows.length - customersAdded,
+      productsSkipped: productParsed.rows.length - productsAdded,
       issues: [...customerParsed.issues, ...productParsed.issues].slice(0, 500),
       db: db !== null,
     });

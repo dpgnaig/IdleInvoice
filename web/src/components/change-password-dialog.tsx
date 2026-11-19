@@ -7,7 +7,10 @@ import { KeyRound, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api, apiErrorMessage, tokenStore } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { Dialog } from '@/components/ui/dialog';
+import { Dialog, DialogFooter } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Field } from '@/components/ui/label';
 
 const schema = z
   .object({
@@ -71,61 +74,49 @@ export function ChangePasswordDialog({
       title="Đổi mật khẩu"
       description="Sau khi đổi, tất cả phiên đăng nhập sẽ bị đăng xuất."
     >
-      <form onSubmit={onSubmit} className="space-y-4" noValidate>
-        <div>
-          <label htmlFor="cur-pass" className="label">Mật khẩu hiện tại</label>
-          <input
+      <form onSubmit={onSubmit} className="grid gap-4" noValidate>
+        <Field label="Mật khẩu hiện tại" htmlFor="cur-pass" error={err('currentPassword')}>
+          <Input
             id="cur-pass"
             type="password"
             autoComplete="current-password"
-            className="input"
             {...form.register('currentPassword')}
             aria-invalid={Boolean(err('currentPassword'))}
           />
-          {err('currentPassword') && <p className="mt-1 text-xs text-destructive">{err('currentPassword')}</p>}
-        </div>
-        <div>
-          <label htmlFor="new-pass" className="label">Mật khẩu mới</label>
-          <input
+        </Field>
+        <Field
+          label="Mật khẩu mới"
+          htmlFor="new-pass"
+          error={err('newPassword')}
+          hint={err('newPassword') ? undefined : 'Tối thiểu 8 ký tự, có chữ và số.'}
+        >
+          <Input
             id="new-pass"
             type="password"
             autoComplete="new-password"
-            className="input"
             {...form.register('newPassword')}
             aria-invalid={Boolean(err('newPassword'))}
           />
-          {err('newPassword') ? (
-            <p className="mt-1 text-xs text-destructive">{err('newPassword')}</p>
-          ) : (
-            <p className="mt-1 text-xs text-muted-foreground">Tối thiểu 8 ký tự, có chữ và số.</p>
-          )}
-        </div>
-        <div>
-          <label htmlFor="confirm-pass" className="label">Nhập lại mật khẩu mới</label>
-          <input
+        </Field>
+        <Field label="Nhập lại mật khẩu mới" htmlFor="confirm-pass" error={err('confirmPassword')}>
+          <Input
             id="confirm-pass"
             type="password"
             autoComplete="new-password"
-            className="input"
             {...form.register('confirmPassword')}
             aria-invalid={Boolean(err('confirmPassword'))}
           />
-          {err('confirmPassword') && <p className="mt-1 text-xs text-destructive">{err('confirmPassword')}</p>}
-        </div>
+        </Field>
 
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-outline" onClick={() => onOpenChange(false)}>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Hủy
-          </button>
-          <button type="submit" className="btn-primary" disabled={form.formState.isSubmitting}>
-            {form.formState.isSubmitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <KeyRound className="h-4 w-4" />
-            )}
+          </Button>
+          <Button type="submit" disabled={form.formState.isSubmitting}>
+            {form.formState.isSubmitting ? <Loader2 className="animate-spin" /> : <KeyRound />}
             Đổi mật khẩu
-          </button>
-        </div>
+          </Button>
+        </DialogFooter>
       </form>
     </Dialog>
   );

@@ -88,6 +88,8 @@ export function findHeader(
   return null;
 }
 
+export type ImportRowStatus = 'ok' | 'duplicate_in_file' | 'invalid';
+
 export interface CustomerRow {
   rowNumber: number;
   taxCode: string;
@@ -98,6 +100,11 @@ export interface CustomerRow {
   email: string;
   bankAccount: string;
   budgetUnitCode: string;
+  /** ok = sẽ thêm; duplicate_in_file = trùng MST với dòng trước; invalid = thiếu dữ liệu. */
+  status: ImportRowStatus;
+  /** Số dòng gốc đã dùng MST này (khi status = duplicate_in_file). */
+  duplicateOf: number | null;
+  reason: string | null;
 }
 
 export interface CustomerIssue {
@@ -118,7 +125,10 @@ const CUSTOMER_HEADERS: string[][] = [
   ['madvquanhengansach', 'madvquanhe', 'maqhns', 'quanhengansach'],
 ];
 
-/** Phân tích sheet DSKH. Trả về tất cả dòng hợp lệ + dòng lỗi + số trùng trong file. */
+/**
+ * Phân tích sheet DSKH. Trả về *toàn bộ* dòng dữ liệu (kể cả dòng lỗi và dòng
+ * trùng MST) kèm trạng thái, để màn preview hiển thị và tô sáng được hết.
+ */
 export function parseCustomerSheet(sheet: SheetData): {
   rows: CustomerRow[];
   issues: CustomerIssue[];
@@ -128,7 +138,11 @@ export function parseCustomerSheet(sheet: SheetData): {
   const rows: CustomerRow[] = [];
   const issues: CustomerIssue[] = [];
   if (!header) {
-    return { rows, issues: [{ rowNumber: 0, reason: 'Không tìm thấy dòng tiêu đề DSKH (cần cột "Mã số thuế")' }], duplicateCount: 0 };
+    return {
+      rows,
+      issues: [{ rowNumber: 0, reason: 'Không tìm thấy dòng tiêu đề DSKH (cần cột "Mã số thuế")' }],
+      duplicateCount: 0,
+    };
   }
   const col = (key: string, fallback: number) => header.columns[key] ?? fallback;
   const cTax = col('masothue', 0);
@@ -140,39 +154,17 @@ export function parseCustomerSheet(sheet: SheetData): {
   const cBank = col('sotaikhoan', 6);
   const cBudget = col('madvquanhengansach', 7);
 
-  const seen = new Set<string>();
+  const firstRow = new Map<string, number>();
   let duplicateCount = 0;
+
   for (const row of sheet.rows.slice(header.rowIndex + 1)) {
     const get = (i: number) => (row.cells[i] ?? '').trim();
     const taxCode = normalizeTaxCode(get(cTax));
     const name = get(cName);
-    const hasData = row.cells.some((c) => c.trim() !== '');
-    if (!hasData) continue;
+    if (!row.cells.some((c) => c.trim() !== '')) continue;
     if (!taxCode && !name) continue;
-    if (!taxCode) {
-      issues.push({ rowNumber: row.rowNumber, reason: 'Thiếu Mã số thuế', name });
-      continue;
-    }
-    if (!name) {
-      issues.push({ rowNumber: row.rowNumber, reason: 'Thiếu tên đơn vị mua hàng', taxCode });
-      continue;
-    }
-    if (/^\d{9}$/.test(taxCode)) {
-      issues.push({
-        rowNumber: row.rowNumber,
-        reason: 'MST chỉ có 9 chữ số (có thể đã mất số 0 đầu do Excel lưu dạng số) — cần sửa định dạng cột thành Text',
-        taxCode,
-        name,
-      });
-      continue;
-    }
-    if (seen.has(taxCode)) {
-      duplicateCount++;
-      issues.push({ rowNumber: row.rowNumber, reason: 'Mã số thuế trùng trong file', taxCode, name });
-      continue;
-    }
-    seen.add(taxCode);
-    rows.push({
+
+    const base: CustomerRow = {
       rowNumber: row.rowNumber,
       taxCode,
       name,
@@ -182,7 +174,37 @@ export function parseCustomerSheet(sheet: SheetData): {
       email: get(cEmail),
       bankAccount: get(cBank),
       budgetUnitCode: get(cBudget),
-    });
+      status: 'ok',
+      duplicateOf: null,
+      reason: null,
+    };
+
+    if (!taxCode) {
+      rows.push({ ...base, status: 'invalid', reason: 'Thiếu Mã số thuế' });
+      issues.push({ rowNumber: row.rowNumber, reason: 'Thiếu Mã số thuế', name });
+      continue;
+    }
+    if (!name) {
+      rows.push({ ...base, status: 'invalid', reason: 'Thiếu tên đơn vị mua hàng' });
+      issues.push({ rowNumber: row.rowNumber, reason: 'Thiếu tên đơn vị mua hàng', taxCode });
+      continue;
+    }
+    if (/^\d{9}$/.test(taxCode)) {
+      const reason = 'MST chỉ có 9 chữ số (có thể đã mất số 0 đầu do Excel lưu dạng số) — cần sửa định dạng cột thành Text';
+      rows.push({ ...base, status: 'invalid', reason });
+      issues.push({ rowNumber: row.rowNumber, reason, taxCode, name });
+      continue;
+    }
+    const dupOf = firstRow.get(taxCode);
+    if (dupOf !== undefined) {
+      const reason = `Mã số thuế trùng với dòng ${dupOf} trong file`;
+      rows.push({ ...base, status: 'duplicate_in_file', duplicateOf: dupOf, reason });
+      issues.push({ rowNumber: row.rowNumber, reason: 'Mã số thuế trùng trong file', taxCode, name });
+      duplicateCount++;
+      continue;
+    }
+    firstRow.set(taxCode, row.rowNumber);
+    rows.push(base);
   }
   return { rows, issues, duplicateCount };
 }
@@ -192,6 +214,9 @@ export interface ProductRow {
   code: string;
   name: string;
   unit: string;
+  status: ImportRowStatus;
+  duplicateOf: number | null;
+  reason: string | null;
 }
 
 const PRODUCT_HEADERS: string[][] = [
@@ -209,38 +234,60 @@ export function parseProductSheet(sheet: SheetData): {
   const rows: ProductRow[] = [];
   const issues: CustomerIssue[] = [];
   if (!header) {
-    return { rows, issues: [{ rowNumber: 0, reason: 'Không tìm thấy dòng tiêu đề DSSP (cần cột "Mã hàng hóa")' }], duplicateCount: 0 };
+    return {
+      rows,
+      issues: [{ rowNumber: 0, reason: 'Không tìm thấy dòng tiêu đề DSSP (cần cột "Mã hàng hóa")' }],
+      duplicateCount: 0,
+    };
   }
   const cCode = header.columns['mahanghoa'] ?? 0;
   const cName = header.columns['tenhanghoa'] ?? 1;
   const cUnit = header.columns['donvitinh'] ?? 2;
-  const seen = new Set<string>();
+  const firstRow = new Map<string, number>();
   let duplicateCount = 0;
+
   for (const row of sheet.rows.slice(header.rowIndex + 1)) {
     const get = (i: number) => (row.cells[i] ?? '').trim();
     const code = get(cCode);
     const name = get(cName);
     const unit = get(cUnit);
     if (!code && !name) continue;
+
+    const base: ProductRow = {
+      rowNumber: row.rowNumber,
+      code,
+      name,
+      unit,
+      status: 'ok',
+      duplicateOf: null,
+      reason: null,
+    };
+
     if (!code) {
+      rows.push({ ...base, status: 'invalid', reason: 'Thiếu mã hàng hóa' });
       issues.push({ rowNumber: row.rowNumber, reason: 'Thiếu mã hàng hóa', name });
       continue;
     }
     if (!name) {
+      rows.push({ ...base, status: 'invalid', reason: 'Thiếu tên hàng hóa' });
       issues.push({ rowNumber: row.rowNumber, reason: 'Thiếu tên hàng hóa', taxCode: code });
       continue;
     }
     if (!unit) {
+      rows.push({ ...base, status: 'invalid', reason: 'Thiếu đơn vị tính' });
       issues.push({ rowNumber: row.rowNumber, reason: 'Thiếu đơn vị tính', taxCode: code, name });
       continue;
     }
-    if (seen.has(code.toUpperCase())) {
-      duplicateCount++;
+    const dupOf = firstRow.get(code.toUpperCase());
+    if (dupOf !== undefined) {
+      const reason = `Mã hàng trùng với dòng ${dupOf} trong file`;
+      rows.push({ ...base, status: 'duplicate_in_file', duplicateOf: dupOf, reason });
       issues.push({ rowNumber: row.rowNumber, reason: 'Mã hàng trùng trong file', taxCode: code, name });
+      duplicateCount++;
       continue;
     }
-    seen.add(code.toUpperCase());
-    rows.push({ rowNumber: row.rowNumber, code, name, unit });
+    firstRow.set(code.toUpperCase(), row.rowNumber);
+    rows.push(base);
   }
   return { rows, issues, duplicateCount };
 }

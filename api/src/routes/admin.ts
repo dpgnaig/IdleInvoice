@@ -139,7 +139,7 @@ adminRouter.get(
 
 export const customersAdminExtras = Router();
 
-/** Tra cứu MST: kiểm tra trong DB trước; nếu chưa có và cho phép thì gọi service ngoài (stub có timeout). */
+/** Tra cứu MST: kiểm tra trong DB trước; nếu chưa có và cho phép thì tra cứu ngoài. */
 customersAdminExtras.post(
   '/customers/lookup-tax',
   asyncHandler(async (req, res) => {
@@ -155,35 +155,120 @@ customersAdminExtras.post(
       res.json({ found: false, inDb: false, message: 'Chức năng tra cứu MST đang tắt' });
       return;
     }
-    const info = await lookupTaxExternal(norm);
-    if (!info) {
+    const result = await lookupTaxExternal(norm);
+    if (result.error) {
+      res.json({ found: false, inDb: false, message: result.error });
+      return;
+    }
+    if (!result.info) {
       res.json({ found: false, inDb: false, message: 'Không tìm thấy thông tin mã số thuế này' });
       return;
     }
-    res.json({ found: true, inDb: false, info });
+    res.json({ found: true, inDb: false, info: result.info });
   }),
 );
 
-/** Service tra cứu MST ngoài (module tách riêng). Hiện trả null khi không cấu hình —
- *  cắm Tổng cục Thuế / nhà cung cấp ở đây, có timeout 8s. */
+export interface TaxLookupInfo {
+  taxCode: string;
+  name: string;
+  address: string;
+  /** Tên viết tắt / tên quốc tế nếu nhà cung cấp có trả về. */
+  shortName?: string;
+  internationalName?: string;
+  /** Tình trạng hoạt động của người nộp thuế, vd "NNT đang hoạt động". */
+  status?: string;
+  source: string;
+}
+
+/** Cache kết quả 10 phút — tránh gọi lại liên tục khi người dùng bấm nhầm nhiều lần. */
+const TAX_CACHE = new Map<string, { at: number; value: Awaited<ReturnType<typeof fetchTaxInfo>> }>();
+const TAX_CACHE_TTL = 10 * 60 * 1000;
+
 async function lookupTaxExternal(
   taxCode: string,
-): Promise<{ name: string; address: string } | null> {
-  const url = process.env.TAX_LOOKUP_URL;
-  if (!url) return null;
+): Promise<{ info?: TaxLookupInfo; error?: string }> {
+  const cached = TAX_CACHE.get(taxCode);
+  if (cached && Date.now() - cached.at < TAX_CACHE_TTL) return cached.value;
+
+  const value = await fetchTaxInfo(taxCode);
+  TAX_CACHE.set(taxCode, { at: Date.now(), value });
+  return value;
+}
+
+/**
+ * Tra cứu MST ra ngoài.
+ * Mặc định dùng VietQR (`https://api.vietqr.io/v2/business/{MST}`) — không cần key.
+ * Đặt `TAX_LOOKUP_URL` nếu muốn thay bằng nhà cung cấp khác; khi đó endpoint được gọi
+ * dạng `${TAX_LOOKUP_URL}?taxCode=...` và phải trả `{ name, address }`.
+ */
+async function fetchTaxInfo(
+  taxCode: string,
+): Promise<{ info?: TaxLookupInfo; error?: string }> {
+  const override = process.env.TAX_LOOKUP_URL;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await fetch(`${url}?taxCode=${encodeURIComponent(taxCode)}`, {
+    if (override) {
+      const res = await fetch(`${override}?taxCode=${encodeURIComponent(taxCode)}`, {
+        signal: controller.signal,
+      });
+      if (!res.ok) return { error: 'Dịch vụ tra cứu MST không phản hồi' };
+      const body = (await res.json()) as { name?: string; address?: string };
+      if (!body.name) return {};
+      return {
+        info: {
+          taxCode,
+          name: body.name,
+          address: body.address ?? '',
+          source: 'custom',
+        },
+      };
+    }
+
+    const res = await fetch(`https://api.vietqr.io/v2/business/${encodeURIComponent(taxCode)}`, {
       signal: controller.signal,
+      headers: { Accept: 'application/json' },
     });
-    if (!res.ok) return null;
-    return (await res.json()) as { name: string; address: string };
-  } catch {
-    return null;
+    if (!res.ok) {
+      if (res.status === 429) return { error: 'Tra cứu MST đang bị giới hạn, thử lại sau ít phút' };
+      return { error: 'Dịch vụ tra cứu MST không phản hồi' };
+    }
+    const body = (await res.json()) as {
+      code?: string;
+      desc?: string;
+      data?: {
+        id?: string;
+        name?: string;
+        internationalName?: string | null;
+        shortName?: string | null;
+        address?: string;
+        status?: string;
+      } | null;
+    };
+    // VietQR: code "00" = thành công, "51" = không tìm thấy MST
+    if (body.code !== '00' || !body.data?.name) {
+      if (body.code === '51') return {};
+      return { error: body.desc ?? 'Dịch vụ tra cứu MST trả về lỗi' };
+    }
+    return {
+      info: {
+        taxCode,
+        name: body.data.name,
+        address: body.data.address ?? '',
+        shortName: body.data.shortName ?? undefined,
+        internationalName: body.data.internationalName ?? undefined,
+        status: body.data.status ?? undefined,
+        source: 'vietqr',
+      },
+    };
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') {
+      return { error: 'Tra cứu MST quá thời gian chờ, thử lại sau' };
+    }
+    return { error: 'Không kết nối được dịch vụ tra cứu MST' };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-export const __adminInternals = { like, lookupTaxExternal };
+export const __adminInternals = { like, lookupTaxExternal, fetchTaxInfo, TAX_CACHE };

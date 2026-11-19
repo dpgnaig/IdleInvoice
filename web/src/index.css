@@ -8,6 +8,9 @@
     --foreground: 222 22% 12%;
     --card: 0 0% 100%;
     --card-foreground: 222 22% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 22% 12%;
+    --radius: 0.5rem;
     --primary: 221 83% 53%;
     --primary-foreground: 0 0% 100%;
     --secondary: 220 14% 96%;
@@ -28,6 +31,8 @@
     --foreground: 210 20% 96%;
     --card: 222 24% 11%;
     --card-foreground: 210 20% 96%;
+    --popover: 222 24% 11%;
+    --popover-foreground: 210 20% 96%;
     --primary: 217 91% 62%;
     --primary-foreground: 222 28% 8%;
     --secondary: 222 18% 16%;
@@ -45,6 +50,18 @@
 
   * {
     @apply border-border;
+  }
+
+  /* Thanh cuộn native theo theme: trình duyệt vẽ thanh cuộn tối khi ở dark mode */
+  :root {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
   }
 
   body {
@@ -65,16 +82,14 @@
   }
 
   :focus-visible {
-    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+    @apply outline-none ring-1 ring-ring;
   }
 }
 
+/* Toàn bộ control dùng component shadcn trong src/components/ui; chỉ còn tiện ích dùng chung. */
 @layer components {
-  .card-surface {
-    @apply rounded-2xl border bg-card text-card-foreground shadow-soft;
-  }
   .skeleton {
-    @apply relative overflow-hidden rounded-lg bg-muted;
+    @apply relative overflow-hidden rounded-md bg-muted;
   }
   .skeleton::after {
     content: '';
@@ -82,40 +97,7 @@
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
     animation: shimmer 1.4s infinite;
   }
-  .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50;
-  }
-  .btn-primary {
-    @apply btn bg-primary text-primary-foreground hover:bg-primary/90;
-  }
-  .btn-outline {
-    @apply btn border bg-background hover:bg-muted;
-  }
-  .btn-ghost {
-    @apply btn hover:bg-muted;
-  }
-  .btn-destructive {
-    @apply btn bg-destructive text-destructive-foreground hover:bg-destructive/90;
-  }
-  .input {
-    @apply w-full rounded-xl border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring;
-  }
-  .label {
-    @apply mb-1.5 block text-sm font-medium;
-  }
-  .field-error {
-    @apply mt-1 text-xs text-destructive;
-  }
-  .badge {
-    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
-  }
   .table-wrap {
-    @apply overflow-x-auto rounded-2xl border bg-card shadow-soft;
-  }
-  .th {
-    @apply whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground;
-  }
-  .td {
-    @apply px-4 py-3 text-sm;
+    @apply overflow-x-auto rounded-xl border bg-card shadow-sm;
   }
 }

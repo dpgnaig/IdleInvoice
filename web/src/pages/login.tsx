@@ -8,6 +8,10 @@ import { toast } from 'sonner';
 import { Loader2, ReceiptText } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Field } from '@/components/ui/label';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 
 const schema = z.object({
   email: z.string().email('Email không hợp lệ'),
@@ -96,74 +100,70 @@ export default function LoginPage() {
             </div>
             <span className="text-lg font-semibold">IdleInvoice</span>
           </div>
-          <h2 className="text-2xl font-semibold tracking-tight">Đăng nhập</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Dùng tài khoản do quản trị viên cấp.
-          </p>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-2xl tracking-tight">Đăng nhập</CardTitle>
+              <CardDescription>Dùng tài khoản do quản trị viên cấp.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSubmit(onSubmit)} className="grid gap-4" noValidate>
+                <Field label="Email" htmlFor="email" error={errors.email?.message}>
+                  <Input
+                    id="email"
+                    type="email"
+                    autoComplete="username"
+                    aria-invalid={Boolean(errors.email)}
+                    {...register('email')}
+                  />
+                </Field>
+                <Field label="Mật khẩu" htmlFor="password" error={errors.password?.message}>
+                  <Input
+                    id="password"
+                    type="password"
+                    autoComplete="current-password"
+                    aria-invalid={Boolean(errors.password)}
+                    {...register('password')}
+                  />
+                </Field>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="mt-6 space-y-4" noValidate>
-            <div>
-              <label htmlFor="email" className="label">Email</label>
-              <input
-                id="email"
-                type="email"
-                autoComplete="username"
-                className="input"
-                aria-invalid={Boolean(errors.email)}
-                {...register('email')}
-              />
-              {errors.email && <p className="field-error">{errors.email.message}</p>}
-            </div>
-            <div>
-              <label htmlFor="password" className="label">Mật khẩu</label>
-              <input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                className="input"
-                aria-invalid={Boolean(errors.password)}
-                {...register('password')}
-              />
-              {errors.password && <p className="field-error">{errors.password.message}</p>}
-            </div>
+                {serverError && (
+                  <motion.p
+                    role="alert"
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+                  >
+                    {serverError}
+                  </motion.p>
+                )}
 
-            {serverError && (
-              <motion.p
-                role="alert"
-                initial={{ opacity: 0, y: -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
-              >
-                {serverError}
-              </motion.p>
-            )}
-
-            <button type="submit" className="btn-primary w-full" disabled={isSubmitting}>
-              {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-              Đăng nhập
-            </button>
-          </form>
-
-          <div className="mt-6 space-y-2 text-sm text-muted-foreground">
-            {setupPending && (
-              <p>
-                Hệ thống chưa thiết lập.{' '}
-                <Link to="/setup" className="font-medium text-primary hover:underline">
-                  Chạy thiết lập ban đầu
-                </Link>
-              </p>
-            )}
-            {registrationMode === 'closed' ? (
-              <p>Hệ thống không mở đăng ký. Liên hệ quản trị viên để được cấp tài khoản.</p>
-            ) : (
-              <p>
-                Chưa có tài khoản?{' '}
-                <Link to="/register" className="font-medium text-primary hover:underline">
-                  Đăng ký
-                </Link>
-              </p>
-            )}
-          </div>
+                <Button type="submit" className="w-full" disabled={isSubmitting}>
+                  {isSubmitting && <Loader2 className="animate-spin" />}
+                  Đăng nhập
+                </Button>
+              </form>
+            </CardContent>
+            <CardFooter className="flex-col items-start gap-2 text-sm text-muted-foreground">
+              {setupPending && (
+                <p>
+                  Hệ thống chưa thiết lập.{' '}
+                  <Link to="/setup" className="font-medium text-primary hover:underline">
+                    Chạy thiết lập ban đầu
+                  </Link>
+                </p>
+              )}
+              {registrationMode === 'closed' ? (
+                <p>Hệ thống không mở đăng ký. Liên hệ quản trị viên để được cấp tài khoản.</p>
+              ) : (
+                <p>
+                  Chưa có tài khoản?{' '}
+                  <Link to="/register" className="font-medium text-primary hover:underline">
+                    Đăng ký
+                  </Link>
+                </p>
+              )}
+            </CardFooter>
+          </Card>
         </motion.div>
       </div>
     </div>

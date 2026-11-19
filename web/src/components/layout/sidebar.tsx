@@ -16,6 +16,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth';
 import { useTheme } from '@/lib/theme';
 
@@ -47,7 +48,7 @@ export function Sidebar({
   const content = (
     <div className="flex h-full flex-col">
       <div className={cn('flex items-center gap-2.5 px-4 py-5', collapsed && 'justify-center px-2')}>
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
           <ReceiptText className="h-5 w-5" />
         </div>
         {!collapsed && (
@@ -75,7 +76,7 @@ export function Sidebar({
               onClick={onMobileClose}
               title={collapsed ? item.label : undefined}
               className={cn(
-                'group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                'group relative flex h-9 items-center gap-2 rounded-md px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
                 active && 'bg-accent text-accent-foreground',
                 collapsed && 'justify-center px-2',
               )}
@@ -83,52 +84,49 @@ export function Sidebar({
               {active && (
                 <motion.span
                   layoutId="nav-active"
-                  className="absolute inset-0 -z-10 rounded-xl bg-accent"
+                  className="absolute inset-0 -z-10 rounded-md bg-accent"
                   transition={{ type: 'spring', stiffness: 400, damping: 34 }}
                 />
               )}
-              <Icon className="h-[18px] w-[18px] shrink-0" />
+              <Icon className="h-4 w-4 shrink-0" />
               {!collapsed && <span className="truncate">{item.label}</span>}
             </NavLink>
           );
         })}
       </nav>
 
-      <div className="space-y-1 border-t p-2">
-        <button
+      <div className="grid gap-1 border-t p-2">
+        <Button
           type="button"
+          variant="ghost"
           onClick={toggle}
-          className={cn(
-            'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted',
-            collapsed && 'justify-center px-2',
-          )}
+          className={cn('w-full justify-start px-2.5 font-medium text-muted-foreground', collapsed && 'justify-center px-2')}
         >
-          {theme === 'dark' ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
+          {theme === 'dark' ? <Sun /> : <Moon />}
           {!collapsed && <span>{theme === 'dark' ? 'Giao diện sáng' : 'Giao diện tối'}</span>}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => void logout()}
-          className={cn(
-            'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted',
-            collapsed && 'justify-center px-2',
-          )}
+          className={cn('w-full justify-start px-2.5 font-medium text-muted-foreground', collapsed && 'justify-center px-2')}
         >
-          <LogOut className="h-[18px] w-[18px]" />
+          <LogOut />
           {!collapsed && <span>Đăng xuất</span>}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
           onClick={onToggle}
           className={cn(
-            'hidden w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted lg:flex',
+            'hidden w-full justify-start px-2.5 font-medium text-muted-foreground lg:flex',
             collapsed && 'justify-center px-2',
           )}
           aria-label={collapsed ? 'Mở rộng thanh bên' : 'Thu gọn thanh bên'}
         >
-          {collapsed ? <ChevronsRight className="h-[18px] w-[18px]" /> : <ChevronsLeft className="h-[18px] w-[18px]" />}
+          {collapsed ? <ChevronsRight /> : <ChevronsLeft />}
           {!collapsed && <span>Thu gọn</span>}
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,19 +1,24 @@
-import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo, useState } from 'react';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { Download, Loader2, Pencil, Plus, Search, Trash2, Users } from 'lucide-react';
+import { Download, Loader2, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { downloadXlsx } from '@/lib/download';
 import { useAuth } from '@/lib/auth';
 import { DataTable, type Column, type SortState } from '@/components/ui/data-table';
-import { Dialog } from '@/components/ui/dialog';
+import { Dialog, DialogFooter } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Field } from '@/components/ui/label';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/layout/page-header';
-import { cn } from '@/lib/utils';
+import { SearchInput } from '@/components/ui/toolbar';
+import { Pagination } from '@/components/ui/pagination';
+import { useAutoPageSize } from '@/lib/use-auto-page-size';
 import { useDebounced } from '@/lib/use-debounced';
 
 export interface Customer {
@@ -48,6 +53,9 @@ export default function CustomersPage() {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounced(search.trim(), 300);
   const [page, setPage] = useState(1);
+  const { ref: tableRef, pageSize } = useAutoPageSize();
+  // Số dòng/trang đổi theo kích thước cửa sổ -> quay về trang 1 để không vượt quá số trang
+  useEffect(() => setPage(1), [pageSize]);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [toDelete, setToDelete] = useState<Customer | null>(null);
@@ -56,10 +64,11 @@ export default function CustomersPage() {
   const sortParam = sort ? (sort.dir === 'desc' ? `-${sort.key}` : sort.key) : 'name';
 
   const list = useQuery({
-    queryKey: ['customers', debouncedSearch, page, sortParam],
+    queryKey: ['customers', debouncedSearch, page, sortParam, pageSize],
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const { data } = await api.get('/customers', {
-        params: { search: debouncedSearch, page, pageSize: 20, sort: sortParam },
+        params: { search: debouncedSearch, page, pageSize, sort: sortParam },
       });
       return data as { data: Customer[]; pagination: { page: number; totalPages: number; total: number } };
     },
@@ -67,25 +76,25 @@ export default function CustomersPage() {
 
   const columns = useMemo<Column<Customer>[]>(
     () => [
-      { key: 'taxCode', header: 'Mã số thuế', sortKey: 'taxCode', render: (r) => <span className="font-mono text-xs">{r.taxCode}</span> },
+      { key: 'taxCode', width: '150px', header: 'Mã số thuế', sortKey: 'taxCode', render: (r) => <span className="font-mono text-xs">{r.taxCode}</span> },
       { key: 'name', header: 'Đơn vị mua hàng', sortKey: 'name', render: (r) => <span className="font-medium">{r.name}</span> },
-      { key: 'buyerName', header: 'Người mua', render: (r) => r.buyerName || '—' },
-      { key: 'email', header: 'Email', render: (r) => <span className="text-muted-foreground">{r.email || '—'}</span> },
-      { key: 'address', header: 'Địa chỉ', render: (r) => <span className="line-clamp-1 max-w-[280px] text-muted-foreground">{r.address || '—'}</span> },
+      { key: 'buyerName', width: '180px', header: 'Người mua', render: (r) => r.buyerName || '—' },
+      { key: 'email', width: '220px', header: 'Email', render: (r) => <span className="text-muted-foreground">{r.email || '—'}</span> },
+      { key: 'address', width: '260px', header: 'Địa chỉ', render: (r) => <span className="text-muted-foreground" title={r.address || undefined}>{r.address || '—'}</span> },
       {
-        key: 'actions',
+        key: 'actions', width: '104px',
         header: '',
         align: 'right',
         alwaysVisible: true,
         render: (r) => (
           <div className="flex justify-end gap-1">
-            <button className="rounded-lg p-2 hover:bg-muted" aria-label="Sửa" onClick={() => { setEditing(r); setDialogOpen(true); }}>
-              <Pencil className="h-4 w-4" />
-            </button>
+            <Button variant="ghost" size="icon-sm" aria-label="Sửa" onClick={() => { setEditing(r); setDialogOpen(true); }}>
+              <Pencil />
+            </Button>
             {user?.role === 'admin' && (
-              <button className="rounded-lg p-2 text-destructive hover:bg-destructive/10" aria-label="Xóa" onClick={() => setToDelete(r)}>
-                <Trash2 className="h-4 w-4" />
-              </button>
+              <Button variant="ghost" size="icon-sm" className="text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label="Xóa" onClick={() => setToDelete(r)}>
+                <Trash2 />
+              </Button>
             )}
           </div>
         ),
@@ -107,37 +116,44 @@ export default function CustomersPage() {
         description="Danh sách khách hàng dùng để ghép khi đọc báo giá."
         actions={
           <>
-            <button
-              className="btn-outline"
+            <Button
+              variant="outline"
               onClick={() =>
                 downloadXlsx('/export/customers.xlsx', 'DSKH.xlsx').catch((e) => toast.error(apiErrorMessage(e)))
               }
             >
-              <Download className="h-4 w-4" /> Xuất Excel
-            </button>
-            <button className="btn-primary" onClick={() => { setEditing(null); setDialogOpen(true); }}>
-              <Plus className="h-4 w-4" /> Thêm mới
-            </button>
+              <Download /> Xuất Excel
+            </Button>
+            <Button onClick={() => { setEditing(null); setDialogOpen(true); }}>
+              <Plus /> Thêm mới
+            </Button>
           </>
         }
       />
 
-      <div className="mb-4 flex items-center gap-2">
-        <div className="relative w-full max-w-sm">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <input
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-            placeholder="Tìm theo MST hoặc tên…"
-            aria-label="Tìm khách hàng"
-            className="input h-9 pl-8"
-          />
-        </div>
-        <span className="text-sm text-muted-foreground">{list.data?.pagination.total ?? 0} khách hàng</span>
-      </div>
-
       <DataTable
+        cardRef={tableRef}
+        toolbar={
+          <SearchInput
+            value={search}
+            onChange={(v) => { setSearch(v); setPage(1); }}
+            placeholder="Tìm theo MST hoặc tên…"
+            ariaLabel="Tìm khách hàng"
+          />
+        }
+        footer={
+          <Pagination
+            page={page}
+            totalPages={list.data?.pagination.totalPages ?? 1}
+            total={list.data?.pagination.total}
+            pageSize={pageSize}
+            unit="khách hàng"
+            onChange={setPage}
+          />
+        }
         rows={list.data?.data ?? []}
+        pageSize={pageSize}
+        fetching={list.isPlaceholderData}
         columns={columns}
         rowKey={(r) => r.id}
         loading={list.isLoading}
@@ -151,17 +167,13 @@ export default function CustomersPage() {
             title="Chưa có khách hàng"
             description="Thêm khách hàng mới hoặc chạy thiết lập ban đầu để import từ Excel."
             action={
-              <button className="btn-primary" onClick={() => { setEditing(null); setDialogOpen(true); }}>
-                <Plus className="h-4 w-4" /> Thêm khách hàng
-              </button>
+              <Button onClick={() => { setEditing(null); setDialogOpen(true); }}>
+                <Plus /> Thêm khách hàng
+              </Button>
             }
           />
         }
       />
-
-      {list.data && list.data.pagination.totalPages > 1 && (
-        <Pagination page={page} totalPages={list.data.pagination.totalPages} onChange={setPage} />
-      )}
 
       <CustomerDialog
         open={dialogOpen}
@@ -228,61 +240,40 @@ function CustomerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title={customer ? 'Sửa khách hàng' : 'Thêm khách hàng'} className="max-w-2xl">
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label htmlFor="c-tax" className="label">Mã số thuế *</label>
-            <input id="c-tax" className="input font-mono" {...register('taxCode')} />
-            {errors.taxCode && <p className="field-error">{errors.taxCode.message}</p>}
-          </div>
-          <div>
-            <label htmlFor="c-name" className="label">Đơn vị mua hàng *</label>
-            <input id="c-name" className="input" {...register('name')} />
-            {errors.name && <p className="field-error">{errors.name.message}</p>}
-          </div>
-          <div>
-            <label htmlFor="c-buyer" className="label">Tên người mua hàng</label>
-            <input id="c-buyer" className="input" {...register('buyerName')} />
-          </div>
-          <div>
-            <label htmlFor="c-email" className="label">Email</label>
-            <input id="c-email" type="email" className="input" {...register('email')} />
-            {errors.email && <p className="field-error">{errors.email.message}</p>}
-          </div>
-          <div className="sm:col-span-2">
-            <label htmlFor="c-addr" className="label">Địa chỉ</label>
-            <input id="c-addr" className="input" {...register('address')} />
-          </div>
-          <div>
-            <label htmlFor="c-idcard" className="label">CCCD</label>
-            <input id="c-idcard" className="input" {...register('idCard')} />
-          </div>
-          <div>
-            <label htmlFor="c-bank" className="label">Số tài khoản</label>
-            <input id="c-bank" className="input" {...register('bankAccount')} />
-          </div>
-          <div>
-            <label htmlFor="c-budget" className="label">Mã ĐV quan hệ ngân sách</label>
-            <input id="c-budget" className="input" {...register('budgetUnitCode')} />
-          </div>
+      <form onSubmit={handleSubmit(onSubmit)} className="grid gap-4">
+        <div className="grid items-start gap-4 sm:grid-cols-2">
+          <Field label="Mã số thuế *" htmlFor="c-tax" error={errors.taxCode?.message}>
+            <Input id="c-tax" className="font-mono" {...register('taxCode')} />
+          </Field>
+          <Field label="Đơn vị mua hàng *" htmlFor="c-name" error={errors.name?.message}>
+            <Input id="c-name" {...register('name')} />
+          </Field>
+          <Field label="Tên người mua hàng" htmlFor="c-buyer">
+            <Input id="c-buyer" {...register('buyerName')} />
+          </Field>
+          <Field label="Email" htmlFor="c-email" error={errors.email?.message}>
+            <Input id="c-email" type="email" {...register('email')} />
+          </Field>
+          <Field label="Địa chỉ" htmlFor="c-addr" className="sm:col-span-2">
+            <Input id="c-addr" {...register('address')} />
+          </Field>
+          <Field label="CCCD" htmlFor="c-idcard">
+            <Input id="c-idcard" {...register('idCard')} />
+          </Field>
+          <Field label="Số tài khoản" htmlFor="c-bank">
+            <Input id="c-bank" {...register('bankAccount')} />
+          </Field>
+          <Field label="Mã ĐV quan hệ ngân sách" htmlFor="c-budget">
+            <Input id="c-budget" {...register('budgetUnitCode')} />
+          </Field>
         </div>
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" className="btn-outline" onClick={() => onOpenChange(false)}>Hủy</button>
-          <button type="submit" className="btn-primary" disabled={isSubmitting}>
-            {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />} Lưu
-          </button>
-        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Hủy</Button>
+          <Button type="submit" disabled={isSubmitting}>
+            {isSubmitting && <Loader2 className="animate-spin" />} Lưu
+          </Button>
+        </DialogFooter>
       </form>
     </Dialog>
-  );
-}
-
-export function Pagination({ page, totalPages, onChange }: { page: number; totalPages: number; onChange: (p: number) => void }) {
-  return (
-    <div className="mt-4 flex items-center justify-end gap-2">
-      <button className="btn-outline h-8 px-3 text-xs" disabled={page <= 1} onClick={() => onChange(page - 1)}>Trước</button>
-      <span className="text-sm text-muted-foreground">Trang {page} / {totalPages}</span>
-      <button className={cn('btn-outline h-8 px-3 text-xs')} disabled={page >= totalPages} onClick={() => onChange(page + 1)}>Sau</button>
-    </div>
   );
 }

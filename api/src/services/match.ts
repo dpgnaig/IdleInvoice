@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import { customerAliases, customers, productAliases, products, salesHistory } from '../db/schema.js';
 import {
+  codeKey,
   normalizeCode,
   normalizeTaxCode,
   normalizeText,
@@ -149,6 +150,20 @@ interface Scored {
   reason: string;
 }
 
+/**
+ * Ghép dòng báo giá với mã hàng trong danh mục.
+ *
+ * Thứ tự ưu tiên (theo nghiệp vụ: "model là khoá chính"):
+ *   1. model trùng khít mã hàng      — "HD-270" -> "HD-270"
+ *   2. model đã ghi nhớ (alias)
+ *   3. mã hàng bắt đầu bằng model    — "LT - 040" -> "LT-040-0.75kw", "LT-040-1.5kw", …
+ *   4. mã hàng chứa model            — "PK.VANXA.LT040", "THANLT-040"
+ *   5. tên hàng trùng khớp           — chỉ khi model không tìm được gì
+ *
+ * So khớp bỏ toàn bộ dấu (`codeKey`) nên "LT - 040", "LT-040", "lt040" là một.
+ * Tầng 3/4 trả về `candidate` khi có nhiều mã cùng khớp để người dùng chọn,
+ * thay vì đoán bừa một mã.
+ */
 export function matchProduct(
   line: ParsedLine,
   customerId: number | null,
@@ -156,22 +171,21 @@ export function matchProduct(
 ): ProductMatch {
   const db = getDb();
   const all = db.select().from(products).all();
-  const modelNorm = normalizeCode(line.model.replace(/[\s.\-/]+/g, ''));
 
-  // 1. model trùng code (bỏ khoảng trắng, hoa/thường)
-  if (modelNorm) {
-    const hit = all.find((p) => normalizeCode(p.code.replace(/[\s.\-/]+/g, '')) === modelNorm);
+  const byKey = new Map<string, typeof products.$inferSelect>();
+  for (const p of all) byKey.set(codeKey(p.code), p);
+
+  const modelKey = codeKey(line.model);
+
+  // 1. model trùng khít mã hàng (bỏ hết dấu, hoa/thường)
+  if (modelKey) {
+    const hit = byKey.get(modelKey);
     if (hit) {
-      return {
-        status: 'matched',
-        productId: hit.id,
-        product: toProduct(hit),
-        method: 'model_exact',
-      };
+      return { status: 'matched', productId: hit.id, product: toProduct(hit), method: 'model_exact' };
     }
   }
 
-  // 2. product_aliases theo model chuẩn hóa
+  // 2. product_aliases theo model
   if (line.model) {
     const aliases = db.select().from(productAliases).all();
     const target = normalizeCode(line.model);
@@ -179,82 +193,110 @@ export function matchProduct(
     if (aliasHit) {
       const hit = all.find((p) => p.id === aliasHit.productId);
       if (hit) {
-        return {
-          status: 'matched',
-          productId: hit.id,
-          product: toProduct(hit),
-          method: 'alias',
-        };
+        return { status: 'matched', productId: hit.id, product: toProduct(hit), method: 'alias' };
       }
     }
   }
 
-  // 3. model nằm trong tên/mã hoặc ngược lại + xếp hạng theo xuất xứ, lịch sử mua
-  const modelA = normalizeCode(line.model);
+  const history = customerTaxCode
+    ? db.select().from(salesHistory).where(eq(salesHistory.customerTaxCode, customerTaxCode)).all()
+    : [];
+  const boughtBefore = (code: string) =>
+    history.some((h) => codeKey(h.productCode) === codeKey(code));
+
+  /** Ưu tiên mã đã từng mua, rồi tới mã ngắn hơn (thường là mã gốc). */
+  const rankTier = (list: Array<typeof products.$inferSelect>) =>
+    [...list].sort((a, b) => {
+      const ha = boughtBefore(a.code) ? 1 : 0;
+      const hb = boughtBefore(b.code) ? 1 : 0;
+      if (ha !== hb) return hb - ha;
+      return codeKey(a.code).length - codeKey(b.code).length;
+    });
+
+  const tierResult = (
+    list: Array<typeof products.$inferSelect>,
+    reason: string,
+    method: string,
+  ): ProductMatch | null => {
+    if (list.length === 0) return null;
+    const ranked = rankTier(list);
+    if (ranked.length === 1) {
+      return { status: 'matched', productId: ranked[0]!.id, product: toProduct(ranked[0]!), method };
+    }
+    return {
+      status: 'candidate',
+      productId: null,
+      candidates: ranked.slice(0, 5).map((p, i) => ({
+        id: p.id,
+        code: p.code,
+        name: p.name,
+        unit: p.unit,
+        score: Math.max(0.6, 0.9 - i * 0.05),
+        reason,
+      })),
+    };
+  };
+
+  // 3. mã hàng bắt đầu bằng model: "LT - 040" -> LT-040-*
+  if (modelKey.length >= 3) {
+    const prefixed = all.filter((p) => {
+      const k = codeKey(p.code);
+      return k !== modelKey && k.startsWith(modelKey);
+    });
+    const r = tierResult(prefixed, 'mã hàng bắt đầu bằng model', 'model_prefix');
+    if (r) return r;
+  }
+
+  // 4. mã hàng chứa model (hoặc model chứa mã hàng): "HD-270" -> HD270KHAU
+  if (modelKey.length >= 3) {
+    const contained = all.filter((p) => {
+      const k = codeKey(p.code);
+      if (k === modelKey) return false;
+      return k.includes(modelKey) || (modelKey.includes(k) && k.length >= 3);
+    });
+    const r = tierResult(contained, 'mã hàng chứa model', 'model_contained');
+    if (r) return r;
+  }
+
+  // 5. Không khớp model -> xếp hạng theo tên hàng
   const nameNorm = normalizeText(line.name);
   const originNorm = normalizeText(line.origin);
-  const scored: Scored[] = [];
-  const history = customerTaxCode
-    ? db
-        .select()
-        .from(salesHistory)
-        .where(eq(salesHistory.customerTaxCode, customerTaxCode))
-        .all()
-    : [];
-
-  for (const p of all) {
-    const codeNorm = normalizeCode(p.code);
-    let score = 0;
-    let reason = '';
-    if (modelA && (codeNorm.includes(modelA) || modelA.includes(codeNorm))) {
-      score = Math.max(score, 0.75);
-      reason = 'model nằm trong mã hàng';
-    }
-    const prodNameNorm = normalizeText(p.name);
-    const nameOverlap = tokenScore(nameNorm, prodNameNorm);
-    if (nameOverlap > score) {
-      score = nameOverlap;
-      reason = 'khớp tên hàng';
-    }
-    if (score >= 0.5) {
-      // điểm cộng: xuất xứ nằm trong tên/mã sản phẩm
+  if (nameNorm) {
+    const scored: Scored[] = [];
+    for (const p of all) {
+      let score = tokenScore(nameNorm, normalizeText(p.name));
+      if (score < 0.5) continue;
+      let reason = 'khớp tên hàng';
       if (originNorm && normalizeText(p.name).includes(originNorm)) {
         score = Math.min(0.99, score + 0.08);
         reason += '+ khớp xuất xứ';
       }
-      if (history.some((h) => normalizeCode(h.productCode) === codeNorm)) {
+      if (boughtBefore(p.code)) {
         score = Math.min(0.99, score + 0.05);
         reason += '+ đã từng mua';
       }
       scored.push({ p, score: Math.round(score * 100) / 100, reason });
     }
-  }
-  scored.sort((a, b) => b.score - a.score);
-
-  if (scored.length === 1 && scored[0]!.score >= 0.9) {
-    return {
-      status: 'matched',
-      productId: scored[0]!.p.id,
-      product: toProduct(scored[0]!.p),
-      method: 'model_contained',
-    };
-  }
-  if (scored.length > 0) {
-    return {
-      status: 'candidate',
-      productId: null,
-      candidates: scored.slice(0, 5).map((s) => ({
-        id: s.p.id,
-        code: s.p.code,
-        name: s.p.name,
-        unit: s.p.unit,
-        score: s.score,
-        reason: s.reason,
-      })),
-    };
+    scored.sort((a, b) => b.score - a.score);
+    if (scored.length === 1 && scored[0]!.score >= 0.9) {
+      return { status: 'matched', productId: scored[0]!.p.id, product: toProduct(scored[0]!.p), method: 'name' };
+    }
+    if (scored.length > 0) {
+      return {
+        status: 'candidate',
+        productId: null,
+        candidates: scored.slice(0, 5).map((s2) => ({
+          id: s2.p.id,
+          code: s2.p.code,
+          name: s2.p.name,
+          unit: s2.p.unit,
+          score: s2.score,
+          reason: s2.reason,
+        })),
+      };
+    }
   }
 
-  // 4-5. khớp gần đúng theo tên (token overlap cao) rồi fallback unmatched
   return { status: 'unmatched', productId: null };
 }
 

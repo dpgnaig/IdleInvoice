@@ -7,6 +7,12 @@ import { api, apiErrorMessage } from '@/lib/api';
 import { PageHeader } from '@/components/layout/page-header';
 import { Combobox, type ComboOption } from '@/components/ui/combobox';
 import { CountUpMoney } from '@/components/ui/count-up';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Field } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/ui/native-select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatMoney, formatTaxRate } from '@/lib/utils';
 
 interface Line {
@@ -164,18 +170,17 @@ export default function InvoiceDetailPage() {
         description={detail.data.customer.name}
         actions={
           <>
-            <button className="btn-outline" onClick={() => navigate('/invoices')}>
-              <ArrowLeft className="h-4 w-4" /> Danh sách
-            </button>
-            <button
-              className="btn-primary"
+            <Button variant="outline" onClick={() => navigate('/invoices')}>
+              <ArrowLeft /> Danh sách
+            </Button>
+            <Button
               disabled={readOnly || invalid || save.isPending}
               onClick={() => void save.mutateAsync()}
               title={readOnly ? 'Hóa đơn đã xuất, không sửa được' : undefined}
             >
-              {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {save.isPending ? <Loader2 className="animate-spin" /> : <Save />}
               Lưu thay đổi
-            </button>
+            </Button>
           </>
         }
       />
@@ -185,7 +190,7 @@ export default function InvoiceDetailPage() {
           {dup.data!.map((w, i) => (
             <p
               key={i}
-              className="flex items-start gap-2 rounded-xl bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400"
+              className="flex items-start gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400"
             >
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {w}
             </p>
@@ -193,10 +198,14 @@ export default function InvoiceDetailPage() {
         </div>
       )}
 
-      <div className="card-surface p-5">
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="sm:col-span-2">
-            <label className="label">Khách hàng</label>
+      <Card>
+        <CardContent className="grid items-start gap-4 p-5 sm:grid-cols-3">
+          <Field
+            label="Khách hàng"
+            htmlFor="inv-customer"
+            className="sm:col-span-2"
+            hint={`MST ${detail.data.customer.taxCode} · ${detail.data.customer.address || '—'}`}
+          >
             <Combobox
               id="inv-customer"
               options={customerOptions}
@@ -205,38 +214,35 @@ export default function InvoiceDetailPage() {
               disabled={readOnly}
               placeholder="Chọn khách hàng"
             />
-            <p className="mt-1 text-xs text-muted-foreground">
-              MST {detail.data.customer.taxCode} · {detail.data.customer.address || '—'}
-            </p>
-          </div>
-          <div>
-            <label htmlFor="inv-pay" className="label">Hình thức thanh toán</label>
-            <input
+          </Field>
+          <Field label="Hình thức thanh toán" htmlFor="inv-pay">
+            <Input
               id="inv-pay"
-              className="input"
               value={paymentMethod}
               disabled={readOnly}
               onChange={(e) => setPaymentMethod(e.target.value)}
             />
-          </div>
-        </div>
+          </Field>
+        </CardContent>
+      </Card>
 
-        <div className="mt-5 overflow-x-auto rounded-xl border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50">
-              <tr>
-                <th className="th">Mã hàng</th>
-                <th className="th w-20">SL</th>
-                <th className="th w-32">Đơn giá</th>
-                <th className="th w-24">Thuế</th>
-                <th className="th w-32 text-right">Thành tiền</th>
-                <th className="th w-10" />
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((l, i) => (
-                <tr key={l.id ?? `n-${i}`} className="border-t">
-                  <td className="px-2 py-2">
+      <Card className="mt-4 overflow-hidden">
+        <Table>
+          <TableHeader className="bg-muted/50">
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="px-3">Mã hàng</TableHead>
+              <TableHead className="w-24 px-3 text-right">SL</TableHead>
+              <TableHead className="w-36 px-3 text-right">Đơn giá</TableHead>
+              <TableHead className="w-28 px-3">Thuế</TableHead>
+              <TableHead className="w-36 px-3 text-right">Thành tiền</TableHead>
+              <TableHead className="w-14 px-2" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {lines.map((l, i) => (
+              <TableRow key={l.id ?? `n-${i}`} className="[&>td]:align-top">
+                <TableCell className="px-3 py-2">
+                    <div className="grid gap-1">
                     <Combobox
                       id={`inv-prod-${i}`}
                       options={productOptions}
@@ -252,13 +258,15 @@ export default function InvoiceDetailPage() {
                       disabled={readOnly}
                       placeholder="Chọn hàng hóa"
                     />
-                    {l.name && <p className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">{l.name}</p>}
-                  </td>
-                  <td className="px-2 py-2">
-                    <input
+                    {l.name && <p className="line-clamp-1 text-[11px] text-muted-foreground">{l.name}</p>}
+                    </div>
+                  </TableCell>
+                  <TableCell className="px-3 py-2">
+                    <Input
                       type="number"
                       step="any"
-                      className="input h-9 w-16 px-2 text-right"
+                      aria-label="Số lượng"
+                      className="px-2 text-right tabular-nums"
                       value={l.qty ?? ''}
                       disabled={readOnly}
                       onChange={(e) =>
@@ -267,11 +275,12 @@ export default function InvoiceDetailPage() {
                         )
                       }
                     />
-                  </td>
-                  <td className="px-2 py-2">
-                    <input
+                  </TableCell>
+                  <TableCell className="px-3 py-2">
+                    <Input
                       type="number"
-                      className="input h-9 w-28 px-2 text-right"
+                      aria-label="Đơn giá"
+                      className="px-2 text-right tabular-nums"
                       value={l.unitPrice ?? ''}
                       disabled={readOnly}
                       onChange={(e) =>
@@ -282,11 +291,10 @@ export default function InvoiceDetailPage() {
                         )
                       }
                     />
-                  </td>
-                  <td className="px-2 py-2">
-                    <select
+                  </TableCell>
+                  <TableCell className="px-3 py-2">
+                    <NativeSelect
                       aria-label="Thuế suất"
-                      className="input h-9 w-20 px-2"
                       value={typeof l.taxRate === 'number' ? String(l.taxRate) : l.taxRate}
                       disabled={readOnly}
                       onChange={(e) =>
@@ -310,57 +318,69 @@ export default function InvoiceDetailPage() {
                           {o.value === 'KCT' || o.value === 'KKKNT' ? o.value : o.label}
                         </option>
                       ))}
-                    </select>
-                  </td>
-                  <td className="px-2 py-2 text-right tabular-nums">
+                    </NativeSelect>
+                  </TableCell>
+                  <TableCell className="px-3 py-2 text-right font-medium tabular-nums leading-9">
                     {formatMoney((l.qty ?? 0) * (l.unitPrice ?? 0))}
-                  </td>
-                  <td className="px-2 py-2">
-                    <button
-                      className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
+                  </TableCell>
+                  <TableCell className="px-2 py-2">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-muted-foreground hover:text-destructive"
                       aria-label="Xóa dòng"
                       disabled={readOnly}
                       onClick={() => setLines((ls) => ls.filter((_, j) => j !== i))}
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </td>
-                </tr>
+                      <Trash2 />
+                    </Button>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
 
         {!readOnly && (
-          <button
-            className="btn-ghost mt-2 h-8 px-2 text-xs"
-            onClick={() => setLines((ls) => [...ls, { productId: null, qty: 1, unitPrice: 0, taxRate: 0.08 }])}
-          >
-            <Plus className="h-3.5 w-3.5" /> Thêm dòng
-          </button>
+          <div className="border-t px-5 py-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setLines((ls) => [...ls, { productId: null, qty: 1, unitPrice: 0, taxRate: 0.08 }])}
+            >
+              <Plus /> Thêm dòng
+            </Button>
+          </div>
         )}
 
-        <div className="mt-4 ml-auto max-w-xs space-y-1.5 text-sm">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Tổng chưa VAT</span>
-            <CountUpMoney value={subtotal} />
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">VAT</span>
-            <CountUpMoney value={vat} />
-          </div>
-          <div className="flex justify-between border-t pt-1.5 text-base font-semibold">
-            <span>Tổng thanh toán</span>
-            <CountUpMoney value={subtotal + vat} className="text-primary" />
-          </div>
+        <div className="flex justify-end border-t bg-muted/30 px-5 py-4">
+          <dl className="grid w-full max-w-xs gap-2 text-sm">
+            <div className="flex items-center justify-between">
+              <dt className="text-muted-foreground">Tổng chưa VAT</dt>
+              <dd className="tabular-nums">
+                <CountUpMoney value={subtotal} />
+              </dd>
+            </div>
+            <div className="flex items-center justify-between">
+              <dt className="text-muted-foreground">VAT</dt>
+              <dd className="tabular-nums">
+                <CountUpMoney value={vat} />
+              </dd>
+            </div>
+            <div className="flex items-center justify-between border-t pt-2 text-base font-semibold">
+              <dt>Tổng thanh toán</dt>
+              <dd className="tabular-nums">
+                <CountUpMoney value={subtotal + vat} className="text-primary" />
+              </dd>
+            </div>
+          </dl>
         </div>
+      </Card>
 
-        {readOnly && (
-          <p className="mt-4 rounded-xl bg-muted px-3 py-2 text-sm text-muted-foreground">
-            Hóa đơn đã xuất nên chỉ xem được. Thuế suất lưu: {formatTaxRate(lines[0]?.taxRate ?? null)}.
-          </p>
-        )}
-      </div>
+      {readOnly && (
+        <p className="mt-4 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+          Hóa đơn đã xuất nên chỉ xem được. Thuế suất lưu: {formatTaxRate(lines[0]?.taxRate ?? null)}.
+        </p>
+      )}
     </div>
   );
 }

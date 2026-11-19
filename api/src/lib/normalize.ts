@@ -28,6 +28,17 @@ export function normalizeCode(s: string): string {
     .toUpperCase();
 }
 
+/**
+ * Khoá so khớp mã hàng: bỏ toàn bộ ký tự không phải chữ/số.
+ * "LT - 040" -> "LT040", "LT-040-0.75kw" -> "LT040075KW", "HD-270" -> "HD270".
+ * Dùng chung cho tìm kiếm (SQLite function `code_key`) và ghép nối.
+ */
+export function codeKey(s: string): string {
+  return String(s ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
+
 const LEGAL_WORDS = [
   'cong ty',
   'tnhh',

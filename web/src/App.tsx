@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
+import { SetupGateContext } from '@/lib/setup-gate';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { AppShell } from '@/components/layout/app-shell';
@@ -53,9 +54,10 @@ function SetupGate({ children }: { children: ReactNode }) {
       // /setup/* trả 403 sau khi hoàn tất => coi như đã thiết lập
       .catch(() => setState('done'));
   }, []);
+  const markDone = useCallback(() => setState('done'), []);
   if (state === 'checking') return <FullPageLoader />;
   if (state === 'needed' && location.pathname !== '/setup') return <Navigate to="/setup" replace />;
-  return <>{children}</>;
+  return <SetupGateContext.Provider value={markDone}>{children}</SetupGateContext.Provider>;
 }
 
 export function AppRoutes() {

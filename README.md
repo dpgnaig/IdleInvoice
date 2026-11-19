@@ -19,12 +19,25 @@ web (React + Vite)  ──HTTP/JSON──▶  api (Express + SQLite)  ──X-In
 | Thành phần | Phiên bản |
 |---|---|
 | Node.js | >= 20 (khuyến nghị 22) |
-| Python | >= 3.11 |
+| Python | >= 3.11 (đã kiểm tra với 3.13) |
 | Docker | >= 24 (nếu chạy bằng container) |
 
 ## Chạy môi trường dev
 
-Ba terminal độc lập.
+**Cách nhanh (khuyến nghị):** một lệnh lo hết — tạo `parser/.venv`, `pip install`, `npm ci` nếu thiếu, rồi mở mỗi service trong một cửa sổ PowerShell riêng.
+
+```powershell
+.\scripts\dev-all.ps1              # parser :8001 + api :3000 + web :5173
+.\scripts\dev-all.ps1 -Install     # ép cài lại dependency của cả ba
+.\scripts\dev-all.ps1 -Seed        # thêm dữ liệu mẫu (admin@example.com / Admin12345)
+.\scripts\dev-all.ps1 -NoWeb       # bỏ web; tương tự -NoApi, -NoParser
+```
+
+Từ cmd: `scripts\dev-all.cmd` (wrapper, nhận cùng tham số). Script đặt sẵn các biến dev mặc định (`JWT_*_SECRET`, `INTERNAL_KEY`, `PARSER_URL`, `CORS_ORIGIN`, `PORT`, `DATABASE_PATH`, `REGISTRATION_MODE`) và tự tạo thư mục chứa DB; biến đã có trong môi trường thì giữ nguyên. Đóng cửa sổ cha hoặc Ctrl+C là tắt cả ba.
+
+Trên Windows, `python` trên PATH có thể chỉ là alias của Microsoft Store (báo lỗi "Python was not found") — khi đó tạo venv bằng `py -m venv .venv` rồi chạy `.\scripts\dev-all.ps1 -Install`, hoặc dùng cách thủ công dưới đây.
+
+**Cách thủ công:** ba terminal độc lập.
 
 **1. Parser**
 
@@ -148,7 +161,7 @@ Chạy lẻ từng phần:
 
 ```bash
 cd parser && python -m pytest -q                 # 38 test: 4 mẫu PDF/Excel + API
-cd api && npm test                               # 31 test: auth, CRUD, export, setup, phân quyền
+cd api && npm test                               # 41 test: auth, CRUD, export, setup, phân quyền
 cd web && npm run typecheck && npm run build
 ```
 
@@ -178,6 +191,12 @@ parser/app
 web/src
   pages/         dashboard, customers, products, quote-import, quotes, invoices, invoice-detail, admin, setup
   components/    layout (sidebar, header, command palette), ui (dialog, combobox, data-table…)
+scripts
+  dev-all.*      chạy cả ba service cho dev (ps1 + wrapper cmd)
+  test-dev.*     chạy test/build toàn bộ (sh + wrapper cmd)
+  pack.ps1       đóng gói image/artifact
+e2e/tests        Playwright, ảnh chụp trong e2e/screenshots
+sample           file báo giá PDF/Excel dùng làm mẫu và fixture test
 ```
 
 ## Ghi chú nghiệp vụ

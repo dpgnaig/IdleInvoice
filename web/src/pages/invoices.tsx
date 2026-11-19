@@ -1,15 +1,18 @@
-import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo, useState } from 'react';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
-import { Download, FileText, Loader2, Search } from 'lucide-react';
+import { Download, FileText, Loader2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { DataTable, type Column, type SortState } from '@/components/ui/data-table';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/layout/page-header';
-import { Pagination } from './customers';
+import { SearchInput, SegmentedControl } from '@/components/ui/toolbar';
+import { Pagination } from '@/components/ui/pagination';
+import { useAutoPageSize } from '@/lib/use-auto-page-size';
 import { formatDate, formatMoney } from '@/lib/utils';
-import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 
 interface InvoiceRow {
   id: number;
@@ -27,14 +30,18 @@ export default function InvoicesPage() {
   const [status, setStatus] = useState<'' | 'draft' | 'exported'>('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
+  const { ref: tableRef, pageSize } = useAutoPageSize();
+  // Số dòng/trang đổi theo kích thước cửa sổ -> quay về trang 1 để không vượt quá số trang
+  useEffect(() => setPage(1), [pageSize]);
   const [selected, setSelected] = useState<Set<number | string>>(new Set());
   const [sort, setSort] = useState<SortState | null>({ key: 'createdAt', dir: 'desc' });
 
   const list = useQuery({
-    queryKey: ['invoices', status, page],
+    queryKey: ['invoices', status, page, pageSize],
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const { data } = await api.get('/invoices', {
-        params: { status: status || undefined, page, pageSize: 20 },
+        params: { status: status || undefined, page, pageSize },
       });
       return data as { data: InvoiceRow[]; pagination: { page: number; totalPages: number; total: number } };
     },
@@ -69,7 +76,7 @@ export default function InvoicesPage() {
   const columns = useMemo<Column<InvoiceRow>[]>(
     () => [
       {
-        key: 'id',
+        key: 'id', width: '90px',
         header: '#',
         sortKey: 'id',
         render: (r) => (
@@ -83,31 +90,24 @@ export default function InvoicesPage() {
         header: 'Khách hàng',
         sortKey: 'customer',
         render: (r) => (
-          <Link to={`/invoices/${r.id}`} className="block">
-            <p className="font-medium hover:underline">{r.customerName}</p>
-            <p className="text-xs text-muted-foreground">MST {r.customerTaxCode}</p>
+          <Link to={`/invoices/${r.id}`} className="block truncate" title={`${r.customerName} · MST ${r.customerTaxCode}`}>
+            <span className="font-medium hover:underline">{r.customerName}</span>
+            <span className="ml-2 font-mono text-xs text-muted-foreground">{r.customerTaxCode}</span>
           </Link>
         ),
       },
-      { key: 'lines', header: 'Số dòng', align: 'right', render: (r) => r.lineCount },
-      { key: 'subtotal', header: 'Tiền hàng', align: 'right', sortKey: 'subtotal', render: (r) => formatMoney(r.subtotal) },
-      { key: 'payment', header: 'Thanh toán', render: (r) => r.paymentMethod },
-      { key: 'createdAt', header: 'Ngày tạo', sortKey: 'createdAt', render: (r) => formatDate(r.createdAt) },
+      { key: 'lines', width: '100px', header: 'Số dòng', align: 'right', render: (r) => r.lineCount },
+      { key: 'subtotal', width: '150px', header: 'Tiền hàng', align: 'right', sortKey: 'subtotal', render: (r) => formatMoney(r.subtotal) },
+      { key: 'payment', width: '140px', header: 'Thanh toán', render: (r) => r.paymentMethod },
+      { key: 'createdAt', width: '130px', header: 'Ngày tạo', sortKey: 'createdAt', render: (r) => formatDate(r.createdAt) },
       {
-        key: 'status',
+        key: 'status', width: '130px',
         header: 'Trạng thái',
         sortKey: 'status',
         render: (r) => (
-          <span
-            className={cn(
-              'badge',
-              r.status === 'draft'
-                ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
-                : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
-            )}
-          >
+          <Badge variant={r.status === 'draft' ? 'warning' : 'success'}>
             {r.status === 'draft' ? 'Nháp' : 'Đã xuất'}
-          </span>
+          </Badge>
         ),
       },
     ],
@@ -148,52 +148,59 @@ export default function InvoicesPage() {
         title="Hóa đơn"
         description="Hóa đơn nháp tạo từ báo giá. Chọn các hóa đơn rồi xuất Excel để import lên phần mềm hóa đơn."
         actions={
-          <button
-            className="btn-primary"
+          <Button
             disabled={idsToExport.length === 0 || exportExcel.isPending}
             onClick={() => void exportExcel.mutateAsync(idsToExport)}
           >
-            {exportExcel.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            {exportExcel.isPending ? <Loader2 className="animate-spin" /> : <Download />}
             Xuất Excel ({idsToExport.length})
-          </button>
+          </Button>
         }
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <div className="flex rounded-xl border p-0.5" role="tablist" aria-label="Lọc trạng thái">
-          {[
-            { v: '', label: 'Tất cả' },
-            { v: 'draft', label: 'Nháp' },
-            { v: 'exported', label: 'Đã xuất' },
-          ].map((t) => (
-            <button
-              key={t.v}
-              role="tab"
-              aria-selected={status === t.v}
-              onClick={() => { setStatus(t.v as typeof status); setPage(1); }}
-              className={cn(
-                'rounded-lg px-3 py-1.5 text-sm font-medium transition-colors',
-                status === t.v ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <div className="relative w-full max-w-xs">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Lọc theo khách hàng…"
-            aria-label="Lọc hóa đơn theo khách hàng"
-            className="input h-9 pl-8"
-          />
-        </div>
-      </div>
-
       <DataTable
+        cardRef={tableRef}
+        toolbar={
+          <>
+            <SegmentedControl
+              ariaLabel="Lọc trạng thái"
+              value={status}
+              onChange={(v) => { setStatus(v); setPage(1); }}
+              options={[
+                { value: '', label: 'Tất cả' },
+                { value: 'draft', label: 'Nháp' },
+                { value: 'exported', label: 'Đã xuất' },
+              ]}
+            />
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder="Lọc theo khách hàng, MST…"
+              ariaLabel="Lọc hóa đơn theo khách hàng"
+            />
+            {selected.size > 0 && (
+              <span className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary/10 px-2.5 text-xs font-medium text-primary">
+                Đã chọn {selected.size}
+                <button type="button" className="underline-offset-2 hover:underline" onClick={() => setSelected(new Set())}>
+                  Bỏ chọn
+                </button>
+              </span>
+            )}
+          </>
+        }
+        footer={
+          <Pagination
+            page={page}
+            totalPages={list.data?.pagination.totalPages ?? 1}
+            total={list.data?.pagination.total}
+            pageSize={pageSize}
+            unit="hóa đơn"
+            onChange={setPage}
+          />
+        }
         rows={rows}
+        pageSize={pageSize}
+        fetching={list.isPlaceholderData}
         columns={columns}
         rowKey={(r) => r.id}
         selected={selected}
@@ -214,10 +221,6 @@ export default function InvoicesPage() {
           />
         }
       />
-
-      {list.data && list.data.pagination.totalPages > 1 && (
-        <Pagination page={page} totalPages={list.data.pagination.totalPages} onChange={setPage} />
-      )}
     </div>
   );
 }

@@ -1,20 +1,25 @@
-import { useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo, useState } from 'react';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { toast } from 'sonner';
-import { Download, Loader2, Package, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { Download, Loader2, Package, Pencil, Plus, Trash2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { downloadXlsx } from '@/lib/download';
 import { useAuth } from '@/lib/auth';
 import { useDebounced } from '@/lib/use-debounced';
 import { DataTable, type Column, type SortState } from '@/components/ui/data-table';
-import { Dialog } from '@/components/ui/dialog';
+import { Dialog, DialogFooter } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Field } from '@/components/ui/label';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/layout/page-header';
-import { Pagination } from './customers';
+import { SearchInput } from '@/components/ui/toolbar';
+import { Pagination } from '@/components/ui/pagination';
+import { useAutoPageSize } from '@/lib/use-auto-page-size';
 
 interface Product {
   id: number;
@@ -37,6 +42,9 @@ export default function ProductsPage() {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounced(search.trim(), 300);
   const [page, setPage] = useState(1);
+  const { ref: tableRef, pageSize } = useAutoPageSize();
+  // Số dòng/trang đổi theo kích thước cửa sổ -> quay về trang 1 để không vượt quá số trang
+  useEffect(() => setPage(1), [pageSize]);
   const [editing, setEditing] = useState<Product | null>(null);
   const [open, setOpen] = useState(false);
   const [toDelete, setToDelete] = useState<Product | null>(null);
@@ -45,10 +53,11 @@ export default function ProductsPage() {
   const sortParam = sort ? (sort.dir === 'desc' ? `-${sort.key}` : sort.key) : 'name';
 
   const list = useQuery({
-    queryKey: ['products', debouncedSearch, page, sortParam],
+    queryKey: ['products', debouncedSearch, page, sortParam, pageSize],
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const { data } = await api.get('/products', {
-        params: { search: debouncedSearch, page, pageSize: 20, sort: sortParam },
+        params: { search: debouncedSearch, page, pageSize, sort: sortParam },
       });
       return data as { data: Product[]; pagination: { page: number; totalPages: number; total: number } };
     },
@@ -56,23 +65,23 @@ export default function ProductsPage() {
 
   const columns = useMemo<Column<Product>[]>(
     () => [
-      { key: 'code', header: 'Mã hàng', sortKey: 'code', render: (r) => <span className="font-mono text-xs">{r.code}</span> },
+      { key: 'code', width: '260px', header: 'Mã hàng', sortKey: 'code', render: (r) => <span className="font-mono text-xs">{r.code}</span> },
       { key: 'name', header: 'Tên hàng hóa', sortKey: 'name', render: (r) => <span className="font-medium">{r.name}</span> },
-      { key: 'unit', header: 'ĐVT', render: (r) => r.unit },
+      { key: 'unit', width: '110px', header: 'ĐVT', render: (r) => r.unit },
       {
-        key: 'actions',
+        key: 'actions', width: '104px',
         header: '',
         align: 'right',
         alwaysVisible: true,
         render: (r) => (
           <div className="flex justify-end gap-1">
-            <button className="rounded-lg p-2 hover:bg-muted" aria-label="Sửa" onClick={() => { setEditing(r); setOpen(true); }}>
-              <Pencil className="h-4 w-4" />
-            </button>
+            <Button variant="ghost" size="icon-sm" aria-label="Sửa" onClick={() => { setEditing(r); setOpen(true); }}>
+              <Pencil />
+            </Button>
             {user?.role === 'admin' && (
-              <button className="rounded-lg p-2 text-destructive hover:bg-destructive/10" aria-label="Xóa" onClick={() => setToDelete(r)}>
-                <Trash2 className="h-4 w-4" />
-              </button>
+              <Button variant="ghost" size="icon-sm" className="text-destructive hover:bg-destructive/10 hover:text-destructive" aria-label="Xóa" onClick={() => setToDelete(r)}>
+                <Trash2 />
+              </Button>
             )}
           </div>
         ),
@@ -94,36 +103,44 @@ export default function ProductsPage() {
         description="Danh mục hàng hóa dùng để ghép mã khi đọc báo giá và xuất hóa đơn."
         actions={
           <>
-            <button
-              className="btn-outline"
+            <Button
+              variant="outline"
               onClick={() =>
                 downloadXlsx('/export/products.xlsx', 'DSSP.xlsx').catch((e) => toast.error(apiErrorMessage(e)))
               }
             >
-              <Download className="h-4 w-4" /> Xuất Excel
-            </button>
-            <button className="btn-primary" onClick={() => { setEditing(null); setOpen(true); }}>
-              <Plus className="h-4 w-4" /> Thêm mới
-            </button>
+              <Download /> Xuất Excel
+            </Button>
+            <Button onClick={() => { setEditing(null); setOpen(true); }}>
+              <Plus /> Thêm mới
+            </Button>
           </>
         }
       />
-      <div className="mb-4 flex items-center gap-2">
-        <div className="relative w-full max-w-sm">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <input
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-            placeholder="Tìm theo mã hoặc tên…"
-            aria-label="Tìm hàng hóa"
-            className="input h-9 pl-8"
-          />
-        </div>
-        <span className="text-sm text-muted-foreground">{list.data?.pagination.total ?? 0} hàng hóa</span>
-      </div>
 
       <DataTable
+        cardRef={tableRef}
+        toolbar={
+          <SearchInput
+            value={search}
+            onChange={(v) => { setSearch(v); setPage(1); }}
+            placeholder="Tìm theo mã hoặc tên…"
+            ariaLabel="Tìm hàng hóa"
+          />
+        }
+        footer={
+          <Pagination
+            page={page}
+            totalPages={list.data?.pagination.totalPages ?? 1}
+            total={list.data?.pagination.total}
+            pageSize={pageSize}
+            unit="hàng hóa"
+            onChange={setPage}
+          />
+        }
         rows={list.data?.data ?? []}
+        pageSize={pageSize}
+        fetching={list.isPlaceholderData}
         columns={columns}
         rowKey={(r) => r.id}
         loading={list.isLoading}
@@ -137,17 +154,13 @@ export default function ProductsPage() {
             title="Chưa có hàng hóa"
             description="Thêm hàng hóa mới hoặc import danh mục DSSP trong bước thiết lập."
             action={
-              <button className="btn-primary" onClick={() => { setEditing(null); setOpen(true); }}>
-                <Plus className="h-4 w-4" /> Thêm hàng hóa
-              </button>
+              <Button onClick={() => { setEditing(null); setOpen(true); }}>
+                <Plus /> Thêm hàng hóa
+              </Button>
             }
           />
         }
       />
-
-      {list.data && list.data.pagination.totalPages > 1 && (
-        <Pagination page={page} totalPages={list.data.pagination.totalPages} onChange={setPage} />
-      )}
 
       <ProductDialog
         open={open}
@@ -199,28 +212,22 @@ function ProductDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title={product ? 'Sửa hàng hóa' : 'Thêm hàng hóa'}>
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        <div>
-          <label htmlFor="p-code" className="label">Mã hàng hóa *</label>
-          <input id="p-code" className="input font-mono" {...register('code')} />
-          {errors.code && <p className="field-error">{errors.code.message}</p>}
-        </div>
-        <div>
-          <label htmlFor="p-name" className="label">Tên hàng hóa *</label>
-          <input id="p-name" className="input" {...register('name')} />
-          {errors.name && <p className="field-error">{errors.name.message}</p>}
-        </div>
-        <div>
-          <label htmlFor="p-unit" className="label">Đơn vị tính *</label>
-          <input id="p-unit" className="input" {...register('unit')} />
-          {errors.unit && <p className="field-error">{errors.unit.message}</p>}
-        </div>
-        <div className="flex justify-end gap-2 pt-2">
-          <button type="button" className="btn-outline" onClick={() => onOpenChange(false)}>Hủy</button>
-          <button type="submit" className="btn-primary" disabled={isSubmitting}>
-            {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />} Lưu
-          </button>
-        </div>
+      <form onSubmit={handleSubmit(onSubmit)} className="grid gap-4">
+        <Field label="Mã hàng hóa *" htmlFor="p-code" error={errors.code?.message}>
+          <Input id="p-code" className="font-mono" {...register('code')} />
+        </Field>
+        <Field label="Tên hàng hóa *" htmlFor="p-name" error={errors.name?.message}>
+          <Input id="p-name" {...register('name')} />
+        </Field>
+        <Field label="Đơn vị tính *" htmlFor="p-unit" error={errors.unit?.message}>
+          <Input id="p-unit" {...register('unit')} />
+        </Field>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Hủy</Button>
+          <Button type="submit" disabled={isSubmitting}>
+            {isSubmitting && <Loader2 className="animate-spin" />} Lưu
+          </Button>
+        </DialogFooter>
       </form>
     </Dialog>
   );

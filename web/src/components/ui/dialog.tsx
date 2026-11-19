@@ -1,8 +1,13 @@
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+/**
+ * Dialog giao diện shadcn/ui (DialogContent/DialogHeader/DialogTitle/DialogDescription),
+ * giữ API cũ `open/onOpenChange/title/description` để các nơi gọi không phải đổi.
+ */
 export function Dialog({
   open,
   onOpenChange,
@@ -32,12 +37,14 @@ export function Dialog({
     };
   }, [open, onOpenChange]);
 
-  return (
+  // Render vào body: header dùng `backdrop-blur` nên tạo containing block, nếu để
+  // dialog nằm trong header thì lớp phủ `fixed` sẽ bị nhốt vào khung header.
+  return createPortal(
     <AnimatePresence>
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-6">
+        <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-6">
           <motion.div
-            className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
+            className="absolute inset-0 bg-black/80"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -49,34 +56,40 @@ export function Dialog({
             aria-modal="true"
             aria-label={title}
             className={cn(
-              'relative z-10 w-full max-w-lg rounded-t-3xl border bg-card p-6 shadow-lift sm:rounded-2xl',
+              'relative z-10 grid w-full max-w-lg gap-4 rounded-t-lg border bg-background p-6 shadow-lg sm:rounded-lg',
               className,
             )}
-            initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 8 }}
-            animate={reduce ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
-            exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.97, y: 4 }}
-            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+            initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.96 }}
+            animate={reduce ? { opacity: 1 } : { opacity: 1, scale: 1 }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.96 }}
+            transition={{ duration: 0.15 }}
           >
-            <div className="mb-4 flex items-start justify-between gap-4">
-              <div>
-                {title && <h2 className="text-lg font-semibold tracking-tight">{title}</h2>}
-                {description && (
-                  <p className="mt-1 text-sm text-muted-foreground">{description}</p>
-                )}
+            {(title || description) && (
+              <div className="flex flex-col space-y-1.5 pr-6 text-left">
+                {title && <h2 className="text-lg font-semibold leading-none tracking-tight">{title}</h2>}
+                {description && <p className="text-sm text-muted-foreground">{description}</p>}
               </div>
-              <button
-                type="button"
-                onClick={() => onOpenChange(false)}
-                className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted"
-                aria-label="Đóng"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            {children}
+            )}
+            <div>{children}</div>
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              aria-label="Đóng"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </motion.div>
         </div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
+/** Hàng nút cuối dialog (DialogFooter của shadcn). */
+export function DialogFooter({ className, children }: { className?: string; children: React.ReactNode }) {
+  return (
+    <div className={cn('flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end', className)}>{children}</div>
   );
 }

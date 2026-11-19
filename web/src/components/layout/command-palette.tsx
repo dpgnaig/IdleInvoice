@@ -7,6 +7,7 @@ import {
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 import { useDebounced } from '@/lib/use-debounced';
 
 const ITEMS = [
@@ -108,14 +109,14 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           />
           <motion.div
             role="dialog" aria-modal="true" aria-label="Bảng lệnh"
-            className="relative z-10 w-full max-w-xl overflow-hidden rounded-2xl border bg-card shadow-lift"
+            className="relative z-10 w-full max-w-xl overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-md"
             initial={{ opacity: 0, y: -8, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -6, scale: 0.99 }}
             transition={{ duration: 0.16 }}
           >
-            <div className="flex items-center gap-2 border-b px-4">
-              <Search className="h-4 w-4 text-muted-foreground" />
+            <div className="flex h-11 items-center gap-2 border-b px-3">
+              <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
               <input
                 autoFocus
                 value={query}
@@ -127,11 +128,11 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 }}
                 placeholder="Chuyển trang hoặc tìm khách/hàng…"
                 aria-label="Tìm lệnh hoặc dữ liệu"
-                className="w-full bg-transparent py-4 text-sm outline-none placeholder:text-muted-foreground"
+                className="h-full w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
               <kbd className="rounded border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">ESC</kbd>
             </div>
-            <ul className="max-h-[52vh] overflow-auto p-2">
+            <ul className="max-h-[52vh] overflow-auto p-1">
               {pages.map((p, i) => {
                 const Icon = p.icon;
                 return (
@@ -141,8 +142,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                       onMouseEnter={() => setActive(i)}
                       onClick={() => go(i)}
                       className={cn(
-                        'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm',
-                        i === active && 'bg-muted',
+                        'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm',
+                        i === active && 'bg-accent text-accent-foreground',
                       )}
                     >
                       <Icon className="h-4 w-4 text-muted-foreground" />
@@ -152,7 +153,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 );
               })}
               {entities.length > 0 && (
-                <li className="px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <li className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
                   Kết quả tìm kiếm
                 </li>
               )}
@@ -165,19 +166,19 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                       onMouseEnter={() => setActive(index)}
                       onClick={() => go(index)}
                       className={cn(
-                        'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm',
-                        index === active && 'bg-muted',
+                        'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm',
+                        index === active && 'bg-accent text-accent-foreground',
                       )}
                     >
-                      <span className="badge bg-muted text-[10px] text-muted-foreground">{e.kind}</span>
-                      <span className="min-w-0 flex-1 truncate">{e.label}</span>
+                      <Badge variant="secondary" className="text-[10px]">{e.kind}</Badge>
+                      <span className="min-w-0 flex-1 truncate text-left">{e.label}</span>
                       <span className="truncate text-xs text-muted-foreground">{e.hint}</span>
                     </button>
                   </li>
                 );
               })}
               {total === 0 && (
-                <li className="px-3 py-8 text-center text-sm text-muted-foreground">Không có kết quả</li>
+                <li className="px-2 py-6 text-center text-sm text-muted-foreground">Không có kết quả</li>
               )}
             </ul>
           </motion.div>

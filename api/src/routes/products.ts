@@ -1,11 +1,11 @@
 import { Router } from 'express';
-import { and, asc, count, desc, eq, like, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, like, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../db/index.js';
 import { invoiceLines, productAliases, products } from '../db/schema.js';
 import { writeAudit } from '../lib/audit.js';
 import { conflict, notFound } from '../lib/errors.js';
-import { normalizeCode } from '../lib/normalize.js';
+import { codeKey, normalizeCode } from '../lib/normalize.js';
 import { asyncHandler } from '../middleware/error.js';
 import { requireRole } from '../middleware/auth.js';
 
@@ -24,14 +24,25 @@ const listQuery = z.object({
   sort: z.string().optional().default('name'),
 });
 
+/**
+ * Điều kiện tìm hàng hóa.
+ * Ngoài LIKE thông thường trên mã/tên, so khớp thêm trên `code_key` (bỏ hết dấu)
+ * để "LT 040", "lt-040" hay "LT - 040" đều tìm ra "LT-040-0.75kw".
+ */
+function productSearchCondition(search: string) {
+  const term = `%${search}%`;
+  const key = codeKey(search);
+  const parts = [like(products.code, term), like(products.name, term)];
+  if (key) parts.push(sql`code_key(${products.code}) LIKE ${`%${key}%`}`);
+  return or(...parts);
+}
+
 productsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
     const q = listQuery.parse(req.query);
     const db = getDb();
-    const where = q.search
-      ? or(like(products.code, `%${q.search}%`), like(products.name, `%${q.search}%`))
-      : undefined;
+    const where = q.search ? productSearchCondition(q.search) : undefined;
     const sortField = q.sort.startsWith('-') ? q.sort.slice(1) : q.sort;
     const sortColumn =
       sortField === 'code'
@@ -68,14 +79,23 @@ productsRouter.get(
     const q = z
       .object({ q: z.string().trim().default(''), limit: z.coerce.number().int().min(1).max(50).default(10) })
       .parse(req.query);
-    const term = `%${q.q}%`;
     const rows = getDb()
       .select()
       .from(products)
-      .where(q.q ? or(like(products.code, term), like(products.name, term)) : undefined)
+      .where(q.q ? productSearchCondition(q.q) : undefined)
       .orderBy(asc(products.code))
       .limit(q.limit)
       .all();
+    // Ưu tiên mã khớp chính xác / bắt đầu bằng từ khoá lên đầu danh sách gợi ý
+    if (q.q) {
+      const key = codeKey(q.q);
+      rows.sort((a, b) => {
+        const ka = codeKey(a.code);
+        const kb = codeKey(b.code);
+        const rank = (k: string) => (k === key ? 0 : k.startsWith(key) ? 1 : k.includes(key) ? 2 : 3);
+        return rank(ka) - rank(kb) || ka.length - kb.length;
+      });
+    }
     res.json(rows);
   }),
 );

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { setupTestEnv } from './helpers.js';
 
@@ -7,6 +7,7 @@ const env = setupTestEnv();
 const { createApp } = await import('../index.js');
 const { getRawDb } = await import('../db/index.js');
 const { setSetting } = await import('../lib/settings.js');
+const { matchProduct } = await import('../services/match.js');
 
 const app = createApp();
 let agent = request.agent(app);
@@ -397,5 +398,190 @@ describe('setup bị khóa sau khi hoàn tất', () => {
       const res = await request(app)[method](path);
       expect(res.status, `${method} ${path}`).toBe(403);
     }
+  });
+});
+
+describe('tra cứu MST (VietQR)', () => {
+  const lookup = (taxCode: string) =>
+    request(app)
+      .post('/api/customers/lookup-tax')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ taxCode });
+
+  const vietqrOk = (data: Record<string, unknown>) =>
+    new Response(JSON.stringify({ code: '00', desc: 'Success - Thành công', data }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  afterAll(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('MST đã có trong DB thì trả về bản ghi, không gọi mạng', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const res = await lookup('0102744230-002');
+    expect(res.status).toBe(200);
+    expect(res.body.inDb).toBe(true);
+    expect(res.body.found).toBe(true);
+    expect(res.body.customer.taxCode).toBe('0102744230-002');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('MST chưa có thì gọi VietQR và trả đủ trường để điền form', async () => {
+    const { __adminInternals } = await import('../routes/admin.js');
+    __adminInternals.TAX_CACHE.clear();
+    const fetchSpy = vi.fn(async () =>
+      vietqrOk({
+        id: '2400573873',
+        name: 'CÔNG TY TNHH ARK VIỆT NAM',
+        internationalName: 'ARK VIETNAM COMPANY LIMITED',
+        shortName: 'ARK VIETNAM CO.,LTD',
+        address: 'Lô FJ-11 KCN Song Khê - Nội Hoàng, TP Bắc Ninh',
+        status: 'NNT đang hoạt động',
+      }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const res = await lookup('2400573873');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      found: true,
+      inDb: false,
+      info: {
+        taxCode: '2400573873',
+        name: 'CÔNG TY TNHH ARK VIỆT NAM',
+        address: 'Lô FJ-11 KCN Song Khê - Nội Hoàng, TP Bắc Ninh',
+        shortName: 'ARK VIETNAM CO.,LTD',
+        status: 'NNT đang hoạt động',
+        source: 'vietqr',
+      },
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const calledUrl = String((fetchSpy.mock.calls[0] as unknown[])[0]);
+    expect(calledUrl).toContain('api.vietqr.io/v2/business/2400573873');
+  });
+
+  it('MST không tồn tại (VietQR code 51) trả found=false kèm thông báo', async () => {
+    const { __adminInternals } = await import('../routes/admin.js');
+    __adminInternals.TAX_CACHE.clear();
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ code: '51', desc: 'Tax not found - Mã số thuế không tồn tại', data: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const res = await lookup('9999999999');
+    expect(res.status).toBe(200);
+    expect(res.body.found).toBe(false);
+    expect(res.body.message).toContain('Không tìm thấy');
+  });
+
+  it('dịch vụ lỗi mạng trả thông báo thay vì 500', async () => {
+    const { __adminInternals } = await import('../routes/admin.js');
+    __adminInternals.TAX_CACHE.clear();
+    vi.stubGlobal('fetch', async () => { throw new TypeError('network down'); });
+    const res = await lookup('0801172667');
+    expect(res.status).toBe(200);
+    expect(res.body.found).toBe(false);
+    expect(res.body.message).toBeTruthy();
+  });
+
+  it('cache theo MST: bấm tra cứu lại không gọi mạng lần hai', async () => {
+    const { __adminInternals } = await import('../routes/admin.js');
+    __adminInternals.TAX_CACHE.clear();
+    const fetchSpy = vi.fn(async () =>
+      vietqrOk({ id: '0101243150', name: 'CÔNG TY CỔ PHẦN MISA', address: 'Hà Nội', status: 'NNT đang hoạt động' }),
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    const first = await lookup('0101243150');
+    const second = await lookup('0101243150');
+    expect(first.body.found).toBe(true);
+    expect(second.body.found).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('tìm + ghép mã hàng theo model', () => {
+  const SEED = [
+    { code: 'LT-040-0.75kw', name: 'Máy thổi khí Longtech LT-040, P=0.75kw', unit: 'Bộ' },
+    { code: 'LT-040-1.5kw', name: 'Máy thổi khí Longtech LT-040, P=1.5kw', unit: 'Bộ' },
+    { code: 'THANLT-040', name: 'Thân máy thổi khí Longtech LT-040', unit: 'Bộ' },
+    { code: 'HD-270', name: 'Đĩa phân phối khí Jaeger HD-270, màng EPDM', unit: 'Cái' },
+    { code: 'HD-270bgkhau', name: 'Đĩa phân phối khí Jaeger HD-270 kèm khớp nối', unit: 'Cái' },
+    { code: 'HD270KHAU', name: 'Đĩa phân phối khí Jaeger HD270 loại có màng', unit: 'Bộ' },
+    { code: '1M421P1155SVBSMV0M3-003', name: 'Bơm hoá chất', unit: 'Cái' },
+  ];
+
+  beforeAll(async () => {
+    for (const p of SEED) {
+      await request(app)
+        .post('/api/products')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(p);
+    }
+  });
+
+  const search = async (q: string) => {
+    const res = await request(app)
+      .get('/api/products')
+      .query({ search: q, pageSize: 50 })
+      .set('Authorization', `Bearer ${accessToken}`);
+    expect(res.status).toBe(200);
+    return (res.body.data as Array<{ code: string }>).map((p) => p.code.toUpperCase());
+  };
+
+  it('tìm được LT-040 khi gõ "LT 040" / "lt-040" / "LT - 040"', async () => {
+    for (const q of ['LT 040', 'lt-040', 'LT - 040']) {
+      const codes = await search(q);
+      expect(codes, q).toContain('LT-040-0.75KW');
+      expect(codes, q).toContain('LT-040-1.5KW');
+    }
+  });
+
+  it('tìm được HD-270 khi gõ "HD270"', async () => {
+    const codes = await search('HD270');
+    expect(codes).toContain('HD-270');
+    expect(codes).toContain('HD270KHAU');
+  });
+
+  it('model trùng khít mã hàng -> matched đúng mã, ưu tiên hơn tên hàng', () => {
+    const line = {
+      line_no: 1, name: 'THÂN MÁY THỔI KHÍ LONGTECH', unit: 'Bộ',
+      qty: 1, unit_price: 1, amount: 1,
+      model: 'LT - 040', brand: '', origin: '', spec_text: '', confidence: 'high' as const,
+    };
+    // "LT - 040" không trùng khít mã nào -> phải ra candidate nhóm LT-040-*,
+    // chứ không được nhảy sang THANLT-040 chỉ vì tên hàng giống.
+    const r = matchProduct(line, null, null);
+    expect(r.status).toBe('candidate');
+    const codes = (r.candidates ?? []).map((c) => c.code);
+    expect(codes).toContain('LT-040-0.75KW');
+    expect(codes).toContain('LT-040-1.5KW');
+    expect(codes).not.toContain('THANLT-040');
+  });
+
+  it('model "HD-270" trùng khít -> matched chính xác', () => {
+    const line = {
+      line_no: 1, name: 'ĐĨA PHÂN PHỐI KHÍ TINH', unit: 'Cái',
+      qty: 1, unit_price: 1, amount: 1,
+      model: 'HD-270', brand: '', origin: '', spec_text: '', confidence: 'high' as const,
+    };
+    const r = matchProduct(line, null, null);
+    expect(r.status).toBe('matched');
+    expect(r.product?.code).toBe('HD-270');
+    expect(r.method).toBe('model_exact');
+  });
+
+  it('model lạ hoàn toàn -> unmatched, cho phép tạo mới', () => {
+    const line = {
+      line_no: 1, name: 'MÔ TẢ KHÔNG CÓ TRONG DANH MỤC', unit: 'Cái',
+      qty: 1, unit_price: 1, amount: 1,
+      model: 'ZZZ-999-XYZ', brand: '', origin: '', spec_text: '', confidence: 'high' as const,
+    };
+    const r = matchProduct(line, null, null);
+    expect(r.status).toBe('unmatched');
+    expect(r.productId).toBeNull();
   });
 });

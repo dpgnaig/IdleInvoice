@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
@@ -6,28 +6,49 @@ import { Check, FileSpreadsheet, Loader2, Upload, UserPlus } from 'lucide-react'
 import { api, apiErrorMessage } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Field } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { SegmentedControl, SearchInput } from '@/components/ui/toolbar';
+import { Pagination } from '@/components/ui/pagination';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { useMarkSetupDone } from '@/lib/setup-gate';
+
+type ImportRowStatus = 'ok' | 'duplicate_in_file' | 'invalid';
+
+interface ImportRow {
+  rowNumber: number;
+  taxCode?: string;
+  code?: string;
+  name: string;
+  unit?: string;
+  buyerName?: string;
+  address?: string;
+  email?: string;
+  status: ImportRowStatus;
+  duplicateOf: number | null;
+  duplicateInDb: boolean;
+  reason: string | null;
+}
+
+interface PreviewGroup {
+  total: number;
+  valid: number;
+  duplicateInFile: number;
+  duplicateInDb: number;
+  invalid: number;
+  /** Toàn bộ dòng đọc được từ sheet, kể cả dòng lỗi và dòng trùng. */
+  rows: ImportRow[];
+  issues: Array<{ rowNumber: number; reason: string; taxCode?: string; name?: string }>;
+  issueCount: number;
+}
 
 interface PreviewResult {
   uploadId: string;
   fileName: string;
-  customers: {
-    total: number;
-    valid: number;
-    duplicateInFile: number;
-    duplicateInDb: number;
-    sample: Array<Record<string, unknown>>;
-    issues: Array<{ rowNumber: number; reason: string; taxCode?: string; name?: string }>;
-    issueCount: number;
-  };
-  products: {
-    total: number;
-    valid: number;
-    duplicateInFile: number;
-    duplicateInDb: number;
-    sample: Array<Record<string, unknown>>;
-    issues: Array<{ rowNumber: number; reason: string; taxCode?: string; name?: string }>;
-    issueCount: number;
-  };
+  customers: PreviewGroup;
+  products: PreviewGroup;
 }
 
 interface Status {
@@ -46,9 +67,12 @@ const STEPS = [
 export default function SetupPage() {
   const navigate = useNavigate();
   const { login } = useAuth();
+  const markSetupDone = useMarkSetupDone();
   const [status, setStatus] = useState<Status | null>(null);
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState(false);
+  const [finished, setFinished] = useState(false);
+  const [countdown, setCountdown] = useState(5);
 
   const [admin, setAdmin] = useState({ fullName: '', email: '', password: '' });
   const [preview, setPreview] = useState<PreviewResult | null>(null);
@@ -88,6 +112,17 @@ export default function SetupPage() {
       })
       .catch(() => toast.error('Không đọc được trạng thái thiết lập'));
   }, [navigate]);
+
+  // Màn hình thành công: đếm ngược rồi tự chuyển về trang chủ
+  useEffect(() => {
+    if (!finished) return;
+    if (countdown <= 0) {
+      navigate('/', { replace: true });
+      return;
+    }
+    const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [finished, countdown, navigate]);
 
   const createAdmin = async () => {
     setBusy(true);
@@ -137,6 +172,7 @@ export default function SetupPage() {
     setBusy(true);
     try {
       await api.post('/setup/complete');
+      markSetupDone();
       // đăng nhập admin để vào thẳng dashboard
       try {
         await login(admin.email, admin.password);
@@ -144,13 +180,35 @@ export default function SetupPage() {
         /* người dùng tự đăng nhập */
       }
       toast.success('Thiết lập hoàn tất!');
-      navigate('/', { replace: true });
+      setFinished(true);
     } catch (err) {
       toast.error(apiErrorMessage(err));
     } finally {
       setBusy(false);
     }
   };
+
+  if (finished) {
+    return (
+      <div className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center px-5 text-center">
+        <motion.div
+          initial={{ scale: 0.6, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: 'spring', stiffness: 260, damping: 18 }}
+          className="flex h-20 w-20 items-center justify-center rounded-full bg-primary text-primary-foreground"
+        >
+          <Check className="h-10 w-10" />
+        </motion.div>
+        <h1 className="mt-6 text-2xl font-semibold tracking-tight">Bạn đã thiết lập thành công!</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Hệ thống đã sẵn sàng. Tự động chuyển về trang chủ sau {countdown} giây…
+        </p>
+        <Button className="mt-6" onClick={() => navigate('/', { replace: true })}>
+          Vào trang chủ ngay
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-5 py-10">
@@ -206,62 +264,55 @@ export default function SetupPage() {
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -16 }}
           transition={{ duration: 0.2 }}
-          className="card-surface mt-6 p-6"
+          className="mt-6 rounded-xl border bg-card p-6 text-card-foreground shadow-sm"
         >
           {step === 1 && (
-            <div className="space-y-4">
+            <div className="grid gap-4">
               <h2 className="text-lg font-semibold">Tạo tài khoản quản trị</h2>
-              <div>
-                <label htmlFor="s-name" className="label">Họ và tên</label>
-                <input
+              <Field label="Họ và tên" htmlFor="s-name">
+                <Input
                   id="s-name"
-                  className="input"
                   value={admin.fullName}
                   onChange={(e) => setAdmin({ ...admin, fullName: e.target.value })}
                 />
-              </div>
-              <div>
-                <label htmlFor="s-email" className="label">Email</label>
-                <input
+              </Field>
+              <Field label="Email" htmlFor="s-email">
+                <Input
                   id="s-email"
                   type="email"
-                  className="input"
                   value={admin.email}
                   onChange={(e) => setAdmin({ ...admin, email: e.target.value })}
                 />
-              </div>
-              <div>
-                <label htmlFor="s-pass" className="label">Mật khẩu</label>
-                <input
+              </Field>
+              <Field label="Mật khẩu" htmlFor="s-pass" hint="Tối thiểu 8 ký tự, có chữ và số.">
+                <Input
                   id="s-pass"
                   type="password"
-                  className="input"
                   value={admin.password}
                   onChange={(e) => setAdmin({ ...admin, password: e.target.value })}
                 />
-                <p className="mt-1 text-xs text-muted-foreground">Tối thiểu 8 ký tự, có chữ và số.</p>
+              </Field>
+              <div className="flex items-center justify-end gap-2">
+                <Button
+                  onClick={() => void createAdmin()}
+                  disabled={busy || !admin.email || admin.password.length < 8 || admin.fullName.length < 2}
+                >
+                  {busy && <Loader2 className="animate-spin" />}
+                  {status?.hasAdmin ? 'Tiếp tục' : 'Tạo tài khoản và tiếp tục'}
+                </Button>
               </div>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => void createAdmin()}
-                disabled={busy || !admin.email || admin.password.length < 8 || admin.fullName.length < 2}
-              >
-                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-                {status?.hasAdmin ? 'Tiếp tục' : 'Tạo tài khoản và tiếp tục'}
-              </button>
             </div>
           )}
 
           {step === 2 && (
-            <div className="space-y-4">
+            <div className="grid gap-4">
               <h2 className="text-lg font-semibold">Import danh mục</h2>
               <p className="text-sm text-muted-foreground">
                 Tải file Excel mẫu (như <code>HĐ-_mẫu.xlsx</code>) có sheet DSKH và sheet DSHH/DSSP.
                 Nếu bỏ qua bước này, danh mục sẽ trống và chỉ thêm được từng bản ghi sau đó.
               </p>
               <label
-                className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors hover:bg-muted/50"
+                className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed px-6 py-10 text-center transition-colors hover:bg-muted/50"
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault();
@@ -270,8 +321,8 @@ export default function SetupPage() {
                 }}
               >
                 <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
-                <span className="mt-2 text-sm font-medium">Kéo thả hoặc bấm để chọn file .xlsx</span>
-                <span className="mt-1 text-xs text-muted-foreground">Tối đa 10 MB</span>
+                <span className="text-sm font-medium">Kéo thả hoặc bấm để chọn file .xlsx</span>
+                <span className="text-xs text-muted-foreground">Tối đa 10 MB</span>
                 <input
                   type="file"
                   accept=".xlsx,.xls"
@@ -290,7 +341,7 @@ export default function SetupPage() {
               )}
 
               {preview && (
-                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="grid gap-4">
                   <div className="grid gap-3 sm:grid-cols-2">
                     <SummaryCard
                       title="Khách hàng (DSKH)"
@@ -309,35 +360,16 @@ export default function SetupPage() {
                       issues={preview.products.issueCount}
                     />
                   </div>
-                  <PreviewTable
-                    rows={preview.customers.sample as Array<{ taxCode: string; name: string }>}
-                    columns={[
-                      { key: 'taxCode', label: 'Mã số thuế' },
-                      { key: 'name', label: 'Đơn vị mua hàng' },
-                    ]}
-                  />
-                  {[...preview.customers.issues, ...preview.products.issues].length > 0 && (
-                    <details className="rounded-xl border p-3 text-sm">
-                      <summary className="cursor-pointer font-medium">
-                        Dòng lỗi / trùng ({preview.customers.issueCount + preview.products.issueCount})
-                      </summary>
-                      <ul className="mt-2 max-h-48 space-y-1 overflow-auto text-xs text-muted-foreground">
-                        {[...preview.customers.issues, ...preview.products.issues].slice(0, 100).map((i, idx) => (
-                          <li key={idx}>
-                            Dòng {i.rowNumber}: {i.reason} {i.taxCode ? `(${i.taxCode})` : ''}
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-                  <div className="flex justify-end gap-2">
-                    <button type="button" className="btn-outline" onClick={() => setStep(3)} disabled={busy}>
+                  <ImportPreviewTable title="Khách hàng (DSKH)" kind="customer" group={preview.customers} />
+                  <ImportPreviewTable title="Hàng hóa (DSSP)" kind="product" group={preview.products} />
+                  <div className="flex items-center justify-end gap-2">
+                    <Button variant="outline" onClick={() => setStep(3)} disabled={busy}>
                       Bỏ qua bước này
-                    </button>
-                    <button type="button" className="btn-primary" onClick={() => void doCommit()} disabled={busy}>
-                      {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                    </Button>
+                    <Button onClick={() => void doCommit()} disabled={busy}>
+                      {busy && <Loader2 className="animate-spin" />}
                       Xác nhận import
-                    </button>
+                    </Button>
                   </div>
                 </motion.div>
               )}
@@ -345,18 +377,20 @@ export default function SetupPage() {
           )}
 
           {step === 3 && (
-            <div className="space-y-4">
+            <div className="grid gap-4">
               <h2 className="text-lg font-semibold">Hoàn tất thiết lập</h2>
-              <div className="rounded-xl border p-4">
-                <p className="text-sm font-medium">Lịch sử hóa đơn đã xuất (tùy chọn)</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Tải file ExportFast.xlsx để hệ thống gợi ý giá gần nhất và cảnh báo xuất trùng.
-                </p>
+              <div className="grid gap-3 rounded-lg border p-4">
+                <div className="grid gap-1">
+                  <p className="text-sm font-medium">Lịch sử hóa đơn đã xuất (tùy chọn)</p>
+                  <p className="text-xs text-muted-foreground">
+                    Tải file ExportFast.xlsx để hệ thống gợi ý giá gần nhất và cảnh báo xuất trùng.
+                  </p>
+                </div>
                 {historyAdded !== null ? (
-                  <p className="mt-3 text-sm text-primary">Đã nhập {historyAdded} dòng lịch sử.</p>
+                  <p className="text-sm text-primary">Đã nhập {historyAdded} dòng lịch sử.</p>
                 ) : (
-                  <label className="btn-outline mt-3 cursor-pointer">
-                    <Upload className="h-4 w-4" /> Chọn file lịch sử
+                  <label className={cn(buttonVariants({ variant: 'outline' }), 'w-fit cursor-pointer')}>
+                    <Upload /> Chọn file lịch sử
                     <input
                       type="file"
                       accept=".xlsx"
@@ -370,24 +404,24 @@ export default function SetupPage() {
                   </label>
                 )}
               </div>
-              <ul className="space-y-1 text-sm text-muted-foreground">
+              <ul className="grid gap-1 text-sm text-muted-foreground">
                 <li>Tài khoản quản trị: {admin.email || 'đã tạo trước đó'}</li>
                 <li>Khách hàng: {commitResult?.customersAdded ?? status?.counts.customers ?? 0}</li>
                 <li>Hàng hóa: {commitResult?.productsAdded ?? status?.counts.products ?? 0}</li>
               </ul>
-              <p className="rounded-xl bg-muted px-3 py-2 text-sm text-muted-foreground">
+              <p className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
                 Sau khi bấm hoàn tất, toàn bộ chức năng thiết lập và import hàng loạt sẽ bị khóa.
               </p>
-              <div className="flex justify-end gap-2">
+              <div className="flex items-center justify-end gap-2">
                 {!commitResult && (
-                  <button type="button" className="btn-outline" onClick={() => setStep(2)}>
+                  <Button variant="outline" onClick={() => setStep(2)}>
                     Quay lại
-                  </button>
+                  </Button>
                 )}
-                <button type="button" className="btn-primary" onClick={() => void complete()} disabled={busy}>
-                  {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                <Button onClick={() => void complete()} disabled={busy}>
+                  {busy && <Loader2 className="animate-spin" />}
                   Hoàn tất và vào hệ thống
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -397,13 +431,40 @@ export default function SetupPage() {
   );
 }
 
+type RowFilter = 'all' | 'addable' | 'dupFile' | 'dupDb' | 'invalid';
+
+const FILTER_LABELS: Array<{ key: RowFilter; label: string }> = [
+  { key: 'all', label: 'Tất cả' },
+  { key: 'addable', label: 'Sẽ thêm' },
+  { key: 'dupFile', label: 'Trùng trong file' },
+  { key: 'dupDb', label: 'Đã có trong DB' },
+  { key: 'invalid', label: 'Dòng lỗi' },
+];
+
+/** Dòng sẽ được ghi vào DB: hợp lệ và chưa có trong DB. */
+const isAddable = (r: ImportRow) => r.status === 'ok' && !r.duplicateInDb;
+
+const ROW_MATCH: Record<RowFilter, (r: ImportRow) => boolean> = {
+  all: () => true,
+  addable: isAddable,
+  dupFile: (r) => r.status === 'duplicate_in_file',
+  dupDb: (r) => r.status === 'ok' && r.duplicateInDb,
+  invalid: (r) => r.status === 'invalid',
+};
+
+const ROW_TONE: Record<ImportRowStatus, string> = {
+  ok: '',
+  duplicate_in_file: 'bg-amber-500/10 hover:bg-amber-500/15',
+  invalid: 'bg-destructive/10 hover:bg-destructive/15',
+};
+
 function SummaryCard({
   title, total, valid, dupFile, dupDb, issues,
 }: {
   title: string; total: number; valid: number; dupFile: number; dupDb: number; issues: number;
 }) {
   return (
-    <div className="rounded-xl border p-4">
+    <div className="rounded-lg border p-4">
       <p className="text-sm font-medium">{title}</p>
       <p className="mt-2 text-2xl font-semibold">{total}</p>
       <p className="text-xs text-muted-foreground">dòng đọc được</p>
@@ -417,33 +478,134 @@ function SummaryCard({
   );
 }
 
-function PreviewTable<T extends Record<string, unknown>>({
-  rows, columns,
+function StatusBadge({ row }: { row: ImportRow }) {
+  if (row.status === 'invalid') {
+    return <Badge variant="destructive">Lỗi</Badge>;
+  }
+  if (row.status === 'duplicate_in_file') {
+    return <Badge variant="warning">Trùng file</Badge>;
+  }
+  if (row.duplicateInDb) {
+    return <Badge variant="info">Đã có</Badge>;
+  }
+  return <Badge variant="success">Sẽ thêm</Badge>;
+}
+
+/** Bảng xem trước import: hiển thị đủ mọi dòng, lọc theo trạng thái, tô sáng dòng trùng/lỗi. */
+function ImportPreviewTable({
+  title, kind, group,
 }: {
-  rows: T[];
-  columns: Array<{ key: string; label: string }>;
+  title: string;
+  kind: 'customer' | 'product';
+  group: PreviewGroup;
 }) {
-  if (!rows.length) return null;
+  const [filter, setFilter] = useState<RowFilter>('all');
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 50;
+
+  const counts: Record<RowFilter, number> = useMemo(
+    () => ({
+      all: group.rows.length,
+      addable: group.rows.filter(isAddable).length,
+      dupFile: group.rows.filter((r) => r.status === 'duplicate_in_file').length,
+      dupDb: group.rows.filter((r) => r.status === 'ok' && r.duplicateInDb).length,
+      invalid: group.rows.filter((r) => r.status === 'invalid').length,
+    }),
+    [group.rows],
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const byFilter = group.rows.filter(ROW_MATCH[filter]);
+    if (!q) return byFilter;
+    return byFilter.filter((r) => {
+      const haystack = kind === 'customer'
+        ? `${r.taxCode ?? ''} ${r.name} ${r.buyerName ?? ''}`
+        : `${r.code ?? ''} ${r.name} ${r.unit ?? ''}`;
+      return haystack.toLowerCase().includes(q);
+    });
+  }, [group.rows, filter, query, kind]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const current = Math.min(page, totalPages);
+  const visible = filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
+
   return (
-    <div className="overflow-x-auto rounded-xl border">
-      <table className="w-full text-sm">
-        <thead className="bg-muted/50">
-          <tr>
-            {columns.map((c) => (
-              <th key={c.key} className="th">{c.label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} className="border-t">
-              {columns.map((c) => (
-                <td key={c.key} className="td">{String(r[c.key] ?? '')}</td>
-              ))}
-            </tr>
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-sm font-semibold">{title}</h3>
+        <p className="text-xs text-muted-foreground">
+          {group.total} dòng đọc được · đang hiển thị {filtered.length}
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <SegmentedControl
+          ariaLabel={`Lọc ${title}`}
+          options={FILTER_LABELS.map((f) => ({ value: f.key, label: `${f.label} (${counts[f.key]})` }))}
+          value={filter}
+          onChange={(v) => { setFilter(v as RowFilter); setPage(1); }}
+        />
+        <SearchInput
+          className="ml-auto w-48"
+          value={query}
+          onChange={(v) => { setQuery(v); setPage(1); }}
+          placeholder={kind === 'customer' ? 'Tìm MST, tên…' : 'Tìm mã, tên…'}
+          ariaLabel={`Tìm trong ${title}`}
+        />
+      </div>
+
+      <Table containerClassName="max-h-80 rounded-lg border">
+        <TableHeader className="sticky top-0 z-10 bg-muted">
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="w-16 px-4">Dòng</TableHead>
+            <TableHead className="px-4">{kind === 'customer' ? 'Mã số thuế' : 'Mã hàng'}</TableHead>
+            <TableHead className="px-4">{kind === 'customer' ? 'Đơn vị mua hàng' : 'Tên hàng hóa'}</TableHead>
+            {kind === 'product' && <TableHead className="w-20 px-4">ĐVT</TableHead>}
+            <TableHead className="w-28 px-4">Trạng thái</TableHead>
+            <TableHead className="px-4">Ghi chú</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {visible.length === 0 && (
+            <TableRow className="hover:bg-transparent">
+              <TableCell className="px-4 py-3 text-muted-foreground" colSpan={kind === 'product' ? 6 : 5}>
+                Không có dòng nào khớp bộ lọc.
+              </TableCell>
+            </TableRow>
+          )}
+          {visible.map((r) => (
+            <TableRow key={r.rowNumber} className={ROW_TONE[r.status]}>
+              <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{r.rowNumber}</TableCell>
+              <TableCell className="px-4 py-3 font-mono text-xs">{r.taxCode || r.code || '—'}</TableCell>
+              <TableCell className="px-4 py-3">{r.name || '—'}</TableCell>
+              {kind === 'product' && <TableCell className="px-4 py-3">{r.unit || '—'}</TableCell>}
+              <TableCell className="px-4 py-3"><StatusBadge row={r} /></TableCell>
+              <TableCell className="px-4 py-3 text-xs text-muted-foreground">
+                {r.status === 'duplicate_in_file'
+                  ? `Trùng với dòng ${r.duplicateOf}`
+                  : r.status === 'invalid'
+                    ? r.reason
+                    : r.duplicateInDb
+                      ? 'Đã có trong danh mục, sẽ bỏ qua'
+                      : '—'}
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
-    </div>
+        </TableBody>
+      </Table>
+
+      {totalPages > 1 && (
+        <Pagination
+          page={current}
+          totalPages={totalPages}
+          total={filtered.length}
+          pageSize={PAGE_SIZE}
+          unit="dòng"
+          onChange={setPage}
+        />
+      )}
+    </section>
   );
 }

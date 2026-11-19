@@ -7,6 +7,10 @@ import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import { CheckCircle2, Loader2, ReceiptText } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Field } from '@/components/ui/label';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 
 const schema = z
   .object({
@@ -56,57 +60,67 @@ export default function RegisterPage() {
         </div>
 
         {done ? (
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card-surface p-6">
-            <CheckCircle2 className="h-9 w-9 text-primary" />
-            <h2 className="mt-3 text-lg font-semibold">
-              {done.status === 'pending' ? 'Đang chờ quản trị viên duyệt' : 'Đăng ký thành công'}
-            </h2>
-            <p className="mt-2 text-sm text-muted-foreground">{done.message}</p>
-            <Link to="/login" className="btn-primary mt-6 w-full">Về trang đăng nhập</Link>
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+            <Card>
+              <CardHeader>
+                <CheckCircle2 className="h-9 w-9 text-primary" />
+                <CardTitle>
+                  {done.status === 'pending' ? 'Đang chờ quản trị viên duyệt' : 'Đăng ký thành công'}
+                </CardTitle>
+                <CardDescription>{done.message}</CardDescription>
+              </CardHeader>
+              <CardFooter>
+                <Button asChild className="w-full">
+                  <Link to="/login">Về trang đăng nhập</Link>
+                </Button>
+              </CardFooter>
+            </Card>
           </motion.div>
         ) : (
-          <>
-            <h2 className="text-2xl font-semibold tracking-tight">Đăng ký tài khoản</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Tài khoản mới có thể cần quản trị viên duyệt trước khi đăng nhập.
-            </p>
-            <form onSubmit={handleSubmit(onSubmit)} className="mt-6 space-y-4" noValidate>
-              <div>
-                <label htmlFor="fullName" className="label">Họ và tên</label>
-                <input id="fullName" className="input" autoComplete="name" {...register('fullName')} />
-                {errors.fullName && <p className="field-error">{errors.fullName.message}</p>}
-              </div>
-              <div>
-                <label htmlFor="email" className="label">Email</label>
-                <input id="email" type="email" className="input" autoComplete="username" {...register('email')} />
-                {errors.email && <p className="field-error">{errors.email.message}</p>}
-              </div>
-              <div>
-                <label htmlFor="password" className="label">Mật khẩu</label>
-                <input id="password" type="password" className="input" autoComplete="new-password" {...register('password')} />
-                <p className="mt-1 text-xs text-muted-foreground">Tối thiểu 8 ký tự, có chữ và số.</p>
-                {errors.password && <p className="field-error">{errors.password.message}</p>}
-              </div>
-              <div>
-                <label htmlFor="confirm" className="label">Nhập lại mật khẩu</label>
-                <input id="confirm" type="password" className="input" autoComplete="new-password" {...register('confirm')} />
-                {errors.confirm && <p className="field-error">{errors.confirm.message}</p>}
-              </div>
-              {serverError && (
-                <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                  {serverError}
-                </p>
-              )}
-              <button type="submit" className="btn-primary w-full" disabled={isSubmitting}>
-                {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                Đăng ký
-              </button>
-            </form>
-            <p className="mt-6 text-sm text-muted-foreground">
-              Đã có tài khoản?{' '}
-              <Link to="/login" className="font-medium text-primary hover:underline">Đăng nhập</Link>
-            </p>
-          </>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-2xl tracking-tight">Đăng ký tài khoản</CardTitle>
+              <CardDescription>
+                Tài khoản mới có thể cần quản trị viên duyệt trước khi đăng nhập.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSubmit(onSubmit)} className="grid gap-4" noValidate>
+                <Field label="Họ và tên" htmlFor="fullName" error={errors.fullName?.message}>
+                  <Input id="fullName" autoComplete="name" {...register('fullName')} />
+                </Field>
+                <Field label="Email" htmlFor="email" error={errors.email?.message}>
+                  <Input id="email" type="email" autoComplete="username" {...register('email')} />
+                </Field>
+                <Field
+                  label="Mật khẩu"
+                  htmlFor="password"
+                  hint="Tối thiểu 8 ký tự, có chữ và số."
+                  error={errors.password?.message}
+                >
+                  <Input id="password" type="password" autoComplete="new-password" {...register('password')} />
+                </Field>
+                <Field label="Nhập lại mật khẩu" htmlFor="confirm" error={errors.confirm?.message}>
+                  <Input id="confirm" type="password" autoComplete="new-password" {...register('confirm')} />
+                </Field>
+                {serverError && (
+                  <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                    {serverError}
+                  </p>
+                )}
+                <Button type="submit" className="w-full" disabled={isSubmitting}>
+                  {isSubmitting && <Loader2 className="animate-spin" />}
+                  Đăng ký
+                </Button>
+              </form>
+            </CardContent>
+            <CardFooter className="text-sm text-muted-foreground">
+              <p>
+                Đã có tài khoản?{' '}
+                <Link to="/login" className="font-medium text-primary hover:underline">Đăng nhập</Link>
+              </p>
+            </CardFooter>
+          </Card>
         )}
       </div>
     </div>

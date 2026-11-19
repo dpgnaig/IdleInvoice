@@ -1,7 +1,9 @@
 import * as React from 'react';
-import { AlertTriangle } from 'lucide-react';
-import { Dialog } from './dialog';
+import { Loader2 } from 'lucide-react';
+import { Dialog, DialogFooter } from './dialog';
+import { Button } from './button';
 
+/** Hộp xác nhận theo AlertDialog của shadcn/ui. */
 export function ConfirmDialog({
   open,
   onOpenChange,
@@ -24,20 +26,13 @@ export function ConfirmDialog({
   const [busy, setBusy] = React.useState(false);
   const isBusy = busy || loading;
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title={title} className="max-w-md">
-      <div className="flex gap-3">
-        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
-          <AlertTriangle className="h-4 w-4" />
-        </div>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
-      <div className="mt-6 flex justify-end gap-2">
-        <button type="button" className="btn-outline" onClick={() => onOpenChange(false)}>
+    <Dialog open={open} onOpenChange={onOpenChange} title={title} description={description} className="max-w-md">
+      <DialogFooter>
+        <Button variant="outline" onClick={() => onOpenChange(false)}>
           Hủy
-        </button>
-        <button
-          type="button"
-          className={destructive ? 'btn-destructive' : 'btn-primary'}
+        </Button>
+        <Button
+          variant={destructive ? 'destructive' : 'default'}
           disabled={isBusy}
           onClick={async () => {
             setBusy(true);
@@ -48,9 +43,10 @@ export function ConfirmDialog({
             }
           }}
         >
-          {isBusy ? 'Đang xử lý…' : confirmLabel}
-        </button>
-      </div>
+          {isBusy && <Loader2 className="animate-spin" />}
+          {confirmLabel}
+        </Button>
+      </DialogFooter>
     </Dialog>
   );
 }
