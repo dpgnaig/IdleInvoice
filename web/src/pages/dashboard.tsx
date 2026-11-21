@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { FileText, History, Package, Upload, Users } from 'lucide-react';
 import { api } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { PageHeader, StatCard } from '@/components/layout/page-header';
 import { CountUpMoney } from '@/components/ui/count-up';
 import { Button } from '@/components/ui/button';
@@ -11,22 +12,22 @@ import { formatMoney } from '@/lib/utils';
 export default function DashboardPage() {
   const customers = useQuery({
     queryKey: ['dash-customers'],
-    queryFn: async () => (await api.get('/customers', { params: { pageSize: 1 } })).data.pagination.total as number,
+    queryFn: async () => (await api.get(endpoints.customers.list, { params: { pageSize: 1 } })).data.pagination.total as number,
   });
   const products = useQuery({
     queryKey: ['dash-products'],
-    queryFn: async () => (await api.get('/products', { params: { pageSize: 1 } })).data.pagination.total as number,
+    queryFn: async () => (await api.get(endpoints.products.list, { params: { pageSize: 1 } })).data.pagination.total as number,
   });
   const invoices = useQuery({
     queryKey: ['dash-invoices'],
-    queryFn: async () => (await api.get('/invoices', { params: { pageSize: 200 } })).data as {
+    queryFn: async () => (await api.get(endpoints.invoices.list, { params: { pageSize: 200 } })).data as {
       data: Array<{ id: number; status: string; subtotal: number; customerName: string }>;
       pagination: { total: number };
     },
   });
   const quotes = useQuery({
     queryKey: ['dash-quotes'],
-    queryFn: async () => (await api.get('/quotes', { params: { pageSize: 5 } })).data as {
+    queryFn: async () => (await api.get(endpoints.quotes.list, { params: { pageSize: 5 } })).data as {
       data: Array<{ id: number; quoteNo: string; createdAt: string; customerName: string }>;
       pagination: { total: number };
     },

@@ -95,9 +95,11 @@ Báo giá vẫn được đọc bằng bộ phân tích tất định (không c�
 - **Khách hàng**: chuẩn hoá/sửa lỗi tên công ty, đoán MST khi file thiếu, rồi tra VietQR lấy tên và địa chỉ đăng ký.
 - **Hàng hoá**: tách tên hàng / thương hiệu / model / mô tả từ một ô thông số kỹ thuật lẫn lộn, và chọn đúng mã hàng nhất trong các ứng viên do bộ ghép tất định trả về.
 
-Cấu hình `GEMINI_API_KEY` (Google AI Studio) và/hoặc `OPENROUTER_API_KEY`. Chuỗi dự phòng chạy tuần tự: **Gemini → các model free của OpenRouter** (`OPENROUTER_MODELS`), mỗi lần thử bị cắt sau `AI_ATTEMPT_TIMEOUT_MS`; provider vừa lỗi bị tạm ngắt 2 phút để lần sau không phải chờ lại. Không có key, hoặc mọi provider đều lỗi, thì báo giá vẫn hiện bình thường với kết quả ghép tất định.
+Mọi nhà cung cấp AI được cấu hình trong web tại **Quản trị → tab AI Agent** (chỉ admin) — không đọc key/model từ biến môi trường. Hỗ trợ **Google Gemini**, **OpenRouter**, **OpenAI Compatible** (bất kỳ server nào có `/chat/completions`) và **Anthropic** (`/messages`). Mỗi mục có Base URL, danh sách model (phân tách bằng dấu phẩy để dự phòng lẫn nhau), API key và công tắc bật/tắt; có nút **Kiểm tra kết nối** và tải danh sách model từ provider. Các provider chạy lần lượt theo thứ tự hiển thị, mỗi lần thử bị cắt sau `AI_ATTEMPT_TIMEOUT_MS`; provider vừa lỗi bị tạm ngắt 2 phút. API key chỉ lưu phía server và không bao giờ trả lại trình duyệt (chỉ hiện 4 ký tự cuối). Chưa cấu hình hoặc tắt hết provider, hay mọi provider đều lỗi, thì báo giá vẫn hiện bình thường với kết quả ghép tất định.
 
-AI chỉ là gợi ý: không bao giờ ghi đè MST đọc được từ file, và mã hàng AI chọn phải nằm trong danh sách ứng viên (id bịa bị bỏ qua). Tắt hoàn toàn bằng `AI_ENABLED=false`. Lưu ý: nội dung báo giá (tên công ty, thông số kỹ thuật các dòng hàng) sẽ được gửi tới nhà cung cấp model khi bật tính năng này.
+Thứ tự ưu tiên provider đổi bằng **kéo-thả** trong danh sách. Cấu hình có thể **sao lưu/khôi phục**: xuất một file JSON mã hóa AES-256-GCM bằng mật khẩu (khóa dẫn xuất scrypt, mật khẩu tối thiểu 8 ký tự) để mang sang máy khác mà file sao lưu không chứa API key dạng đọc được; khôi phục sẽ thay toàn bộ danh sách provider hiện có.
+
+AI chỉ là gợi ý: không bao giờ ghi đè MST đọc được từ file, và mã hàng AI chọn phải nằm trong danh sách ứng viên (id bịa bị bỏ qua). Khi AI bật, mọi dòng hàng đều được gửi đi kiểm tra lại (kể cả dòng đã ghép chắc chắn), và màn hình nhập báo giá hiển thị provider/model thực tế đã trả lời. Tắt hoàn toàn bằng công tắc trong màn hình AI Agent. Lưu ý: nội dung báo giá (tên công ty, thông số kỹ thuật các dòng hàng) sẽ được gửi tới nhà cung cấp model khi bật tính năng này.
 
 **MST chưa có trong danh mục**: api tra `https://api.vietqr.io/v2/business/{MST}` (không cần key) và tự thêm khách hàng với `source = TAX_LOOKUP`. Đặt `AUTO_ADD_CUSTOMER=false` để chỉ gợi ý trên màn hình. Tắt tra cứu ngoài bằng `TAX_LOOKUP_ENABLED=false`; thay nhà cung cấp khác bằng `TAX_LOOKUP_URL` (nhận `?taxCode=` và trả `{name, address}`).
 
@@ -175,7 +177,7 @@ Chạy lẻ từng phần:
 
 ```bash
 cd parser && python -m pytest -q                 # 38 test: 4 mẫu PDF/Excel + API
-cd api && npm test                               # 41 test: auth, CRUD, export, setup, phân quyền
+cd api && npm test                               # 68 test: auth, CRUD, export, setup, AI provider, phân quyền
 cd web && npm run typecheck && npm run build
 ```
 
@@ -195,16 +197,17 @@ Lưu ý khi chạy e2e nhiều lần: giới hạn đăng nhập mặc định l
 ```
 api/src
   db/            schema Drizzle + migrations SQL (chạy tuần tự, ghi vào __migrations)
-  routes/        auth, setup, customers, products, quotes, invoices, history, export, admin
-  services/      parser-client, excel-import, match, quotes, invoice-export, tokens
+  routes/        auth, setup, customers, products, quotes, invoices, history, export, admin, ai-providers
+  services/      parser-client, excel-import, match, quotes, invoice-export, tokens, ai, ai-providers, ai-backup
   test/          vitest + supertest
 parser/app
   pdf_parser.py  pdfplumber: dò header theo từ khóa, gộp dòng phụ vào spec_text
   excel_parser.py openpyxl/xlrd
   table_reader.py đọc bảng có đường kẻ / không đường kẻ
 web/src
-  pages/         dashboard, customers, products, quote-import, quotes, invoices, invoice-detail, admin, setup
-  components/    layout (sidebar, header, command palette), ui (dialog, combobox, data-table…)
+  lib/           api client (axios + refresh token), endpoints.ts (toàn bộ route API), auth, theme
+  pages/         dashboard, customers, products, quote-import, quotes, invoices, invoice-detail, admin, ai-settings, setup
+  components/    layout (sidebar, header, command palette), ui (dialog, combobox, data-table, date-picker, sonner…)
 scripts
   dev-all.*      chạy cả ba service cho dev (ps1 + wrapper cmd)
   test-dev.*     chạy test/build toàn bộ (sh + wrapper cmd)
@@ -216,6 +219,7 @@ sample           file báo giá PDF/Excel dùng làm mẫu và fixture test
 ## Ghi chú nghiệp vụ
 
 - Thứ tự đối chiếu khách hàng: mã số thuế → tên viết tắt đã nhớ → khớp mờ duy nhất → tạo mới. Sản phẩm: mã = mã → tên viết tắt → chứa chuỗi (ưu tiên trùng tên/xuất xứ/lịch sử) → khớp mờ → chưa khớp.
+- Số báo giá không bắt buộc: bỏ trống thì api sinh mã `BG-YYYYMMDD-NNN` (đảm bảo không trùng); nhập số đã tồn tại sẽ bị từ chối.
 - Mọi cảnh báo (lệch tổng, trùng số báo giá, báo giá hết hạn, nguy cơ bán trùng trong 30 ngày, lệch giá, độ tin cậy thấp) hiển thị trước khi xác nhận; có thể bỏ qua nhưng không bị chặn.
 - File export có đúng 18 cột theo mẫu, mỗi hóa đơn cách nhau đúng một dòng trống; cột thuế lưu số `0.08` với định dạng `0%` nên hiển thị 8%, còn `KCT`/`KKKNT` lưu dạng chuỗi.
 - Hóa đơn đã export bị khóa sửa qua API (trả 409) cho tới khi được tạo lại.

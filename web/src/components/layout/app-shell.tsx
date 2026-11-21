@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { motion, useReducedMotion } from 'framer-motion';
-import { Toaster } from 'sonner';
 import { Sidebar } from './sidebar';
 import { Header } from './header';
 import { CommandPalette } from './command-palette';
@@ -50,7 +49,6 @@ export function AppShell() {
         </main>
       </div>
       <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} />
-      <Toaster position="bottom-right" richColors closeButton expand={false} />
     </div>
   );
 }

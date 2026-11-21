@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, tokenStore, attemptRefresh, setUnauthorizedHandler } from './api';
+import { endpoints } from './endpoints';
 
 export interface AuthUser {
   id: number;
@@ -29,7 +30,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const token = await attemptRefresh();
       if (token) {
         try {
-          const { data } = await api.get<AuthUser>('/auth/me');
+          const { data } = await api.get<AuthUser>(endpoints.auth.me);
           if (alive) setUser(data);
         } catch {
           tokenStore.set(null);
@@ -51,7 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       loading,
       async login(email, password) {
-        const { data } = await api.post<{ accessToken: string; user: AuthUser }>('/auth/login', {
+        const { data } = await api.post<{ accessToken: string; user: AuthUser }>(endpoints.auth.login, {
           email,
           password,
         });
@@ -61,14 +62,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       async logout() {
         try {
-          await api.post('/auth/logout');
+          await api.post(endpoints.auth.logout);
         } finally {
           tokenStore.set(null);
           setUser(null);
         }
       },
       async refreshMe() {
-        const { data } = await api.get<AuthUser>('/auth/me');
+        const { data } = await api.get<AuthUser>(endpoints.auth.me);
         setUser(data);
       },
     }),

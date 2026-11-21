@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { History, Trash2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
@@ -36,13 +37,13 @@ export default function QuotesPage() {
     queryKey: ['quotes', page, pageSize],
     placeholderData: keepPreviousData,
     queryFn: async () => {
-      const { data } = await api.get('/quotes', { params: { page, pageSize } });
+      const { data } = await api.get(endpoints.quotes.list, { params: { page, pageSize } });
       return data as { data: QuoteRow[]; pagination: { totalPages: number; total: number } };
     },
   });
 
   const remove = useMutation({
-    mutationFn: async (row: QuoteRow) => api.delete(`/quotes/${row.id}`),
+    mutationFn: async (row: QuoteRow) => api.delete(endpoints.quotes.byId(row.id)),
     onSuccess: (_r, row) => {
       toast.success(`Đã xóa báo giá ${row.quoteNo}`);
       setToDelete(null);

@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import { Check, FileSpreadsheet, Loader2, Upload, UserPlus } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -84,14 +85,14 @@ export default function SetupPage() {
     fd.append('file', file);
     setBusy(true);
     try {
-      const { data: pv } = await api.post<{ uploadId: string; total: number }>('/setup/import/history/preview', fd, {
+      const { data: pv } = await api.post<{ uploadId: string; total: number }>(endpoints.setup.historyPreview, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       if (!pv.total) {
         toast.error('Không đọc được dòng lịch sử nào trong file');
         return;
       }
-      const { data } = await api.post<{ added: number }>('/setup/import/history/commit', { uploadId: pv.uploadId });
+      const { data } = await api.post<{ added: number }>(endpoints.setup.historyCommit, { uploadId: pv.uploadId });
       setHistoryAdded(data.added);
       toast.success(`Đã nhập ${data.added} dòng lịch sử hóa đơn`);
     } catch (err) {
@@ -103,7 +104,7 @@ export default function SetupPage() {
 
   useEffect(() => {
     api
-      .get<Status>('/setup/status')
+      .get<Status>(endpoints.setup.status)
       .then((r) => {
         setStatus(r.data);
         if (r.data.setupCompleted) navigate('/', { replace: true });
@@ -127,7 +128,7 @@ export default function SetupPage() {
   const createAdmin = async () => {
     setBusy(true);
     try {
-      await api.post('/setup/admin', admin);
+      await api.post(endpoints.setup.admin, admin);
       toast.success('Đã tạo tài khoản quản trị');
       setStep(2);
     } catch (err) {
@@ -142,7 +143,7 @@ export default function SetupPage() {
     fd.append('file', file);
     setBusy(true);
     try {
-      const { data } = await api.post<PreviewResult>('/setup/import/preview', fd, {
+      const { data } = await api.post<PreviewResult>(endpoints.setup.importPreview, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setPreview(data);
@@ -157,7 +158,7 @@ export default function SetupPage() {
     if (!preview) return;
     setBusy(true);
     try {
-      const { data } = await api.post('/setup/import/commit', { uploadId: preview.uploadId });
+      const { data } = await api.post(endpoints.setup.importCommit, { uploadId: preview.uploadId });
       setCommitResult(data);
       toast.success('Đã import danh mục');
       setStep(3);
@@ -171,7 +172,7 @@ export default function SetupPage() {
   const complete = async () => {
     setBusy(true);
     try {
-      await api.post('/setup/complete');
+      await api.post(endpoints.setup.complete);
       markSetupDone();
       // đăng nhập admin để vào thẳng dashboard
       try {

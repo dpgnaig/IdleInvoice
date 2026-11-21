@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { toast } from 'sonner';
 import { Download, Loader2, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { downloadXlsx } from '@/lib/download';
 import { useAuth } from '@/lib/auth';
 import { DataTable, type Column, type SortState } from '@/components/ui/data-table';
@@ -67,7 +68,7 @@ export default function CustomersPage() {
     queryKey: ['customers', debouncedSearch, page, sortParam, pageSize],
     placeholderData: keepPreviousData,
     queryFn: async () => {
-      const { data } = await api.get('/customers', {
+      const { data } = await api.get(endpoints.customers.list, {
         params: { search: debouncedSearch, page, pageSize, sort: sortParam },
       });
       return data as { data: Customer[]; pagination: { page: number; totalPages: number; total: number } };
@@ -104,7 +105,7 @@ export default function CustomersPage() {
   );
 
   const del = useMutation({
-    mutationFn: async (id: number) => api.delete(`/customers/${id}`),
+    mutationFn: async (id: number) => api.delete(endpoints.customers.byId(id)),
     onSuccess: () => { toast.success('Đã xóa khách hàng'); setToDelete(null); void qc.invalidateQueries({ queryKey: ['customers'] }); },
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
@@ -227,8 +228,8 @@ function CustomerDialog({
 
   const onSubmit = async (values: FormValues) => {
     try {
-      if (customer) await api.put(`/customers/${customer.id}`, values);
-      else await api.post('/customers', values);
+      if (customer) await api.put(endpoints.customers.byId(customer.id), values);
+      else await api.post(endpoints.customers.list, values);
       toast.success(customer ? 'Đã cập nhật khách hàng' : 'Đã thêm khách hàng');
       onSaved();
     } catch (err) {

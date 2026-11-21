@@ -23,6 +23,8 @@ export function Combobox({
   onSearch,
   loading,
   emptyText = 'Không có kết quả',
+  allowCustom = false,
+  customHint = 'Dùng giá trị đã nhập',
   id,
   disabled,
   className,
@@ -35,6 +37,9 @@ export function Combobox({
   onSearch?: (q: string) => void;
   loading?: boolean;
   emptyText?: string;
+  /** Cho phép dùng luôn chuỗi đang gõ nếu không có trong danh sách (vd. tên model tuỳ chỉnh). */
+  allowCustom?: boolean;
+  customHint?: string;
   id?: string;
   disabled?: boolean;
   className?: string;
@@ -57,6 +62,14 @@ export function Combobox({
       (o) => o.label.toLowerCase().includes(q) || (o.hint ?? '').toLowerCase().includes(q),
     );
   }, [options, query, onSearch]);
+
+  // Cho phép chọn luôn giá trị tự gõ khi không trùng mục nào (mặc định không bật)
+  const shown = React.useMemo(() => {
+    const q = query.trim();
+    if (!allowCustom || !q) return filtered;
+    if (options.some((o) => o.value === q || o.label === q)) return filtered;
+    return [{ value: q, label: q, hint: customHint }, ...filtered];
+  }, [allowCustom, customHint, filtered, options, query]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -119,13 +132,13 @@ export function Combobox({
     if (!open) return;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setActive((a) => Math.min(a + 1, filtered.length - 1));
+      setActive((a) => Math.min(a + 1, shown.length - 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setActive((a) => Math.max(a - 1, 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      const opt = filtered[active];
+      const opt = shown[active];
       if (opt) choose(opt);
     } else if (e.key === 'Escape') {
       setOpen(false);
@@ -207,10 +220,10 @@ export function Combobox({
                 {loading && (
                   <li className="px-2 py-1.5 text-sm text-muted-foreground">Đang tải…</li>
                 )}
-                {!loading && filtered.length === 0 && (
+                {!loading && shown.length === 0 && (
                   <li className="px-2 py-6 text-center text-sm text-muted-foreground">{emptyText}</li>
                 )}
-                {filtered.map((o, i) => (
+                {shown.map((o, i) => (
                   <li key={o.value} role="option" aria-selected={o.value === value} data-index={i}>
                     <button
                       type="button"

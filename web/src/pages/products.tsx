@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { toast } from 'sonner';
 import { Download, Loader2, Package, Pencil, Plus, Trash2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { downloadXlsx } from '@/lib/download';
 import { useAuth } from '@/lib/auth';
 import { useDebounced } from '@/lib/use-debounced';
@@ -56,7 +57,7 @@ export default function ProductsPage() {
     queryKey: ['products', debouncedSearch, page, sortParam, pageSize],
     placeholderData: keepPreviousData,
     queryFn: async () => {
-      const { data } = await api.get('/products', {
+      const { data } = await api.get(endpoints.products.list, {
         params: { search: debouncedSearch, page, pageSize, sort: sortParam },
       });
       return data as { data: Product[]; pagination: { page: number; totalPages: number; total: number } };
@@ -91,7 +92,7 @@ export default function ProductsPage() {
   );
 
   const del = useMutation({
-    mutationFn: async (id: number) => api.delete(`/products/${id}`),
+    mutationFn: async (id: number) => api.delete(endpoints.products.byId(id)),
     onSuccess: () => { toast.success('Đã xóa hàng hóa'); setToDelete(null); void qc.invalidateQueries({ queryKey: ['products'] }); },
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
@@ -199,8 +200,8 @@ function ProductDialog({
 
   const onSubmit = async (values: FormValues) => {
     try {
-      if (product) await api.put(`/products/${product.id}`, values);
-      else await api.post('/products', values);
+      if (product) await api.put(endpoints.products.byId(product.id), values);
+      else await api.post(endpoints.products.list, values);
       toast.success(product ? 'Đã cập nhật hàng hóa' : 'Đã thêm hàng hóa');
       onSaved();
     } catch (err) {

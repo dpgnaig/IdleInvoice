@@ -1,26 +1,26 @@
 /**
- * Gọi LLM free qua chuỗi dự phòng: Google AI Studio (Gemini) trước, rồi các
- * model free của OpenRouter. Mỗi lần thử có timeout riêng; model lỗi liên tiếp
- * bị "cầu dao" tạm ngắt để lần sau không phải chờ lại.
+ * Gọi LLM qua chuỗi dự phòng. Mọi nhà cung cấp (Gemini, OpenRouter, OpenAI
+ * Compatible, Anthropic) do quản trị viên cấu hình trong DB tại màn hình
+ * Quản trị → AI Agent; không đọc key/model từ biến môi trường.
  *
- * Không bao giờ throw: trả null khi mọi lựa chọn thất bại/không cấu hình key.
+ * Mỗi lần thử có timeout riêng; model lỗi liên tiếp bị "cầu dao" tạm ngắt để lần
+ * sau không phải chờ lại. Không bao giờ throw: trả null khi không có provider,
+ * AI bị tắt, hoặc mọi lựa chọn thất bại.
  */
 import { logger } from '../lib/logger.js';
+import {
+  aiGlobalEnabled,
+  listProviderRows,
+  resolveBaseUrl,
+  splitModels,
+  type AiProviderKind,
+  type AiProviderRow,
+} from './ai-providers.js';
 
 // Mở ngay sau lần lỗi đầu: rate-limit/quota hỏng thường lặp lại ngay, chờ
 // lần thứ hai chỉ tổ làm người dùng đợi thêm mỗi lần tải báo giá.
 const OPEN_AFTER_FAILS = 1;
 const COOLDOWN_MS = 120_000;
-
-/**
- * Model free mặc định. OpenRouter thay đổi danh sách thường xuyên — nếu một
- * model bị gỡ (404), `discoverFreeModel` tự dò model free còn hiệu lực.
- */
-const DEFAULT_OPENROUTER_MODELS = [
-  'nvidia/nemotron-3.5-lightning:free',
-  'google/gemma-4-31b-it:free',
-  'inclusionai/ling-3.2-flash:free',
-];
 
 interface Breaker {
   fails: number;
@@ -29,9 +29,16 @@ interface Breaker {
 
 const breakers = new Map<string, Breaker>();
 
-interface Provider {
+export interface Provider {
   name: string;
   run(prompt: string, signal: AbortSignal): Promise<string>;
+}
+
+export interface ProviderConfig {
+  kind: AiProviderKind;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
 }
 
 function numEnv(name: string, fallback: number): number {
@@ -41,158 +48,156 @@ function numEnv(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-/**
- * Dùng Gemini của Google AI Studio. Nhận cả GEMINI_API_KEY và GOOGLE_AI_API_KEY.
- *
- * Google hay gỡ model cũ khỏi tài khoản mới (404), nên dùng alias
- * `gemini-flash-lite-latest` trước; chỉ khi gặp 404 mới thử model dự phòng
- * (429/quota thì chuyển ngay sang OpenRouter — chờ thêm chỉ làm chậm).
- */
-function geminiProvider(): Provider[] {
-  const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_AI_API_KEY;
-  if (!key) return [];
-  const configured = (process.env.GEMINI_MODEL || '').trim();
-  const models = [...new Set([configured || 'gemini-flash-lite-latest', 'gemini-3.5-flash', 'gemini-2.5-flash'])];
-
-  return [
-    {
-      name: `gemini/${models[0]}`,
-      async run(prompt, signal) {
-        let lastErr: Error | null = null;
-        for (const model of models) {
-          const res = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-            {
-              method: 'POST',
-              signal,
-              headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { temperature: 0, maxOutputTokens: 800, responseMimeType: 'application/json' },
-              }),
-            },
-          );
-          if (!res.ok) {
-            const detail = await res.text().catch(() => '');
-            lastErr = new Error(`HTTP ${res.status} (${model}) ${detail.slice(0, 140)}`);
-            if (res.status === 404) continue; // model bị gỡ -> thử model khác
-            throw lastErr;
-          }
-          const body = (await res.json()) as {
-            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-          };
-          const text = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
-          if (!text.trim()) throw new Error('Phản hồi rỗng');
-          return text;
-        }
-        throw lastErr ?? new Error('Không có model Gemini khả dụng');
-      },
-    },
-  ];
+function trimBase(url: string): string {
+  return url.replace(/\/+$/, '');
 }
 
-/** Danh sách model free OpenRouter (phân tách bằng dấu phẩy trong OPENROUTER_MODELS). */
-function openRouterProviders(): Provider[] {
-  const key = process.env.OPENROUTER_API_KEY;
-  if (!key) return [];
-  const models = (process.env.OPENROUTER_MODELS || '')
-    .split(',')
-    .map((m) => m.trim())
-    .filter(Boolean);
-  const list = models.length ? models : DEFAULT_OPENROUTER_MODELS;
-  return list.map((model) => ({
-    name: `openrouter/${model}`,
-    async run(prompt: string, signal: AbortSignal) {
-      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        signal,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${key}`,
-          'X-Title': 'IdleInvoice',
-        },
-        body: JSON.stringify({
-          model,
-          temperature: 0,
-          max_tokens: 800,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      });
-      if (!res.ok) {
-        const detail = await res.text().catch(() => '');
-        // 404 = model đã bị gỡ/bỏ bản free -> thử tự dò model thay thế
-        if (res.status === 404) {
-          const fallback = await discoverFreeModel(key, signal);
-          if (fallback) return fallback(prompt, signal);
-        }
-        throw new Error(`HTTP ${res.status} ${detail.slice(0, 160)}`);
-      }
-      const body = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-        error?: { message?: string };
-      };
-      const text = body.choices?.[0]?.message?.content ?? '';
-      if (!text.trim()) throw new Error(body.error?.message ?? 'Phản hồi rỗng');
-      return text;
-    },
-  }));
+async function errorDetail(res: Response): Promise<string> {
+  const detail = await res.text().catch(() => '');
+  return `HTTP ${res.status}${detail ? ` — ${detail.slice(0, 160)}` : ''}`;
 }
 
-/**
- * OpenRouter gỡ/bổ sung model free khá thường xuyên, nên danh sách mặc định sẽ
- * cũ dần. Khi gặp 404, hỏi /api/v1/models và lấy một model free còn hiệu lực
- * (ưu tiên model lớn) để dùng luôn cho các lần sau.
- */
-let discovered: string | null = null;
+/** Google Gemini (generateContent). `baseUrl` mặc định là .../v1beta. */
+async function runGemini(
+  baseUrl: string,
+  model: string,
+  key: string,
+  prompt: string,
+  signal: AbortSignal,
+): Promise<string> {
+  const res = await fetch(`${trimBase(baseUrl)}/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    signal,
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0, maxOutputTokens: 800, responseMimeType: 'application/json' },
+    }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} (${model}) ${(await res.text().catch(() => '')).slice(0, 140)}`);
+  const body = (await res.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const text = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+  if (!text.trim()) throw new Error('Phản hồi rỗng');
+  return text;
+}
 
-async function discoverFreeModel(key: string, signal: AbortSignal): Promise<((p: string, s: AbortSignal) => Promise<string>) | null> {
-  if (discovered) return makeRunner(key, discovered);
-  try {
-    const res = await fetch('https://openrouter.ai/api/v1/models', { signal });
-    if (!res.ok) return null;
-    const body = (await res.json()) as {
-      data?: Array<{ id?: string; pricing?: { prompt?: string; completion?: string } }>;
-    };
-    const free = (body.data ?? [])
-      .filter((m) => m.id?.endsWith(':free') && m.pricing?.prompt === '0' && m.pricing?.completion === '0')
-      .map((m) => m.id!);
-    const pick = free.find((id) => id.includes('nemotron')) ?? free.find((id) => !id.includes('embedding')) ?? null;
-    if (!pick) return null;
-    discovered = pick;
-    logger.warn({ model: pick }, 'OpenRouter: dùng model free tự dò được');
-    return makeRunner(key, pick);
-  } catch {
-    return null;
+/** OpenAI Compatible (/chat/completions) và OpenRouter. */
+async function runOpenAiCompatible(
+  baseUrl: string,
+  model: string,
+  key: string,
+  prompt: string,
+  signal: AbortSignal,
+  opts: { openRouter?: boolean } = {},
+): Promise<string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (key) headers.Authorization = `Bearer ${key}`;
+  if (opts.openRouter) headers['X-Title'] = 'IdleInvoice';
+  const res = await fetch(`${trimBase(baseUrl)}/chat/completions`, {
+    method: 'POST',
+    signal,
+    headers,
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      max_tokens: 800,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!res.ok) throw new Error(`${model}: ${await errorDetail(res)}`);
+  const body = (await res.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+    error?: { message?: string };
+  };
+  const text = body.choices?.[0]?.message?.content ?? '';
+  if (!text.trim()) throw new Error(body.error?.message ?? 'Phản hồi rỗng');
+  return text;
+}
+
+/** Anthropic Messages API (/messages). */
+async function runAnthropic(
+  baseUrl: string,
+  model: string,
+  key: string,
+  prompt: string,
+  signal: AbortSignal,
+): Promise<string> {
+  const res = await fetch(`${trimBase(baseUrl)}/messages`, {
+    method: 'POST',
+    signal,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 800,
+      temperature: 0,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!res.ok) throw new Error(`${model}: ${await errorDetail(res)}`);
+  const body = (await res.json()) as {
+    content?: Array<{ type?: string; text?: string }>;
+    error?: { message?: string };
+  };
+  const text = (body.content ?? [])
+    .filter((b) => b.type === 'text' || typeof b.text === 'string')
+    .map((b) => b.text ?? '')
+    .join('');
+  if (!text.trim()) throw new Error(body.error?.message ?? 'Phản hồi rỗng');
+  return text;
+}
+
+function runByKind(
+  cfg: ProviderConfig & { model: string },
+  prompt: string,
+  signal: AbortSignal,
+): Promise<string> {
+  const base = resolveBaseUrl(cfg.kind, cfg.baseUrl);
+  switch (cfg.kind) {
+    case 'gemini':
+      return runGemini(base, cfg.model, cfg.apiKey, prompt, signal);
+    case 'anthropic':
+      return runAnthropic(base, cfg.model, cfg.apiKey, prompt, signal);
+    case 'openrouter':
+      return runOpenAiCompatible(base, cfg.model, cfg.apiKey, prompt, signal, { openRouter: true });
+    case 'openai':
+    default:
+      return runOpenAiCompatible(base, cfg.model, cfg.apiKey, prompt, signal);
   }
 }
 
-function makeRunner(key: string, model: string) {
-  return async (prompt: string, signal: AbortSignal) => {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      signal,
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`, 'X-Title': 'IdleInvoice' },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        max_tokens: 800,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status} (model tự dò ${model})`);
-    const body = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const text = body.choices?.[0]?.message?.content ?? '';
-    if (!text.trim()) throw new Error('Phản hồi rỗng');
-    return text;
+function providersForRow(row: AiProviderRow): Provider[] {
+  const cfg: ProviderConfig = {
+    kind: row.kind,
+    baseUrl: row.baseUrl,
+    apiKey: row.apiKey,
+    model: row.model,
   };
+  return splitModels(row.model).map((model) => ({
+    name: `${row.kind}/${model}`,
+    run: (prompt, signal) => runByKind({ ...cfg, model }, prompt, signal),
+  }));
 }
 
+/** Provider đọc từ cấu hình DB do quản trị viên nhập (màn hình AI Agent). */
 export function aiProviders(): Provider[] {
-  return [...geminiProvider(), ...openRouterProviders()];
+  let rows: AiProviderRow[] = [];
+  try {
+    rows = listProviderRows();
+  } catch (err) {
+    logger.warn({ err }, 'Không đọc được cấu hình AI trong DB');
+    return [];
+  }
+  return rows.filter((r) => r.enabled === 1).flatMap(providersForRow);
 }
 
 export function aiEnabled(): boolean {
-  return process.env.AI_ENABLED !== 'false' && aiProviders().length > 0;
+  return aiGlobalEnabled() && aiProviders().length > 0;
 }
 
 function isOpen(name: string): boolean {
@@ -214,11 +219,20 @@ function recordOk(name: string): void {
   breakers.delete(name);
 }
 
+export interface CompletionResult {
+  text: string;
+  /** Tên provider/model thực tế đã trả lời, vd "gemini/gemini-2.5-flash". */
+  provider: string;
+}
+
 /**
  * Chạy lần lượt các provider còn "đóng" cầu dao cho tới khi một cái trả lời.
  * Mỗi lần thử bị cắt sau `attemptTimeoutMs`; toàn bộ dừng khi quá `deadline`.
  */
-export async function aiComplete(prompt: string, deadline: number): Promise<string | null> {
+export async function aiCompleteWithProvider(
+  prompt: string,
+  deadline: number,
+): Promise<CompletionResult | null> {
   const timeoutMs = numEnv('AI_ATTEMPT_TIMEOUT_MS', 10_000);
   for (const provider of aiProviders()) {
     const remaining = deadline - Date.now();
@@ -230,7 +244,7 @@ export async function aiComplete(prompt: string, deadline: number): Promise<stri
     try {
       const text = await provider.run(prompt, controller.signal);
       recordOk(provider.name);
-      return text;
+      return { text, provider: provider.name };
     } catch (err) {
       recordFail(provider.name);
       const msg = err instanceof Error ? err.message : String(err);
@@ -240,6 +254,92 @@ export async function aiComplete(prompt: string, deadline: number): Promise<stri
     }
   }
   return null;
+}
+
+export async function aiComplete(prompt: string, deadline: number): Promise<string | null> {
+  const result = await aiCompleteWithProvider(prompt, deadline);
+  return result?.text ?? null;
+}
+
+const TEST_PROMPT = 'Trả về đúng JSON sau, không giải thích: {"ok":true}';
+
+/** Kiểm tra một cấu hình trước khi lưu (thử lần lượt từng model). */
+export async function testProviderConfig(
+  cfg: ProviderConfig,
+  timeoutMs = 20_000,
+): Promise<{ ok: boolean; message: string; model?: string; latencyMs: number }> {
+  const models = splitModels(cfg.model);
+  const started = Date.now();
+  let lastError = 'Không có model để kiểm tra';
+  for (const model of models) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const startedOne = Date.now();
+      const text = await runByKind({ ...cfg, model }, TEST_PROMPT, controller.signal);
+      if (!text.trim()) throw new Error('Phản hồi rỗng');
+      return {
+        ok: true,
+        model,
+        latencyMs: Date.now() - startedOne,
+        message: `Kết nối thành công với ${model}`,
+      };
+    } catch (err) {
+      lastError =
+        err instanceof Error
+          ? err.name === 'AbortError'
+            ? 'Hết thời gian chờ'
+            : err.message
+          : String(err);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return { ok: false, message: lastError, latencyMs: Date.now() - started };
+}
+
+/** Tải danh sách model công khai của provider (dùng cho gợi ý trong form). */
+export async function fetchProviderModels(cfg: ProviderConfig, timeoutMs = 15_000): Promise<string[]> {
+  const base = resolveBaseUrl(cfg.kind, cfg.baseUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    if (cfg.kind === 'gemini') {
+      const res = await fetch(`${base}/models?pageSize=200`, {
+        signal: controller.signal,
+        headers: { 'x-goog-api-key': cfg.apiKey },
+      });
+      if (!res.ok) throw new Error(await errorDetail(res));
+      const body = (await res.json()) as { models?: Array<{ name?: string }> };
+      return (body.models ?? [])
+        .map((m) => (m.name ?? '').replace(/^models\//, ''))
+        .filter((m) => m && !m.includes('embedding') && !m.includes('aqa'))
+        .sort();
+    }
+
+    if (cfg.kind === 'anthropic') {
+      const res = await fetch(`${base}/models?limit=100`, {
+        signal: controller.signal,
+        headers: { 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01' },
+      });
+      if (!res.ok) throw new Error(await errorDetail(res));
+      const body = (await res.json()) as { data?: Array<{ id?: string }> };
+      return (body.data ?? []).map((m) => m.id ?? '').filter(Boolean);
+    }
+
+    const res = await fetch(`${base}/models`, {
+      signal: controller.signal,
+      headers: cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {},
+    });
+    if (!res.ok) throw new Error(await errorDetail(res));
+    const body = (await res.json()) as { data?: Array<{ id?: string }> };
+    const ids = (body.data ?? []).map((m) => m.id ?? '').filter(Boolean);
+    return cfg.kind === 'openrouter'
+      ? ids.sort((a, b) => Number(b.endsWith(':free')) - Number(a.endsWith(':free')))
+      : ids.sort();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Bóc JSON từ phản hồi LLM (chấp nhận có bọc ```json hoặc lời dẫn thừa). */

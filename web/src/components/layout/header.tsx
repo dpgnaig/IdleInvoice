@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { KeyRound, LogOut, Menu, Search, ChevronRight } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { ChangePasswordDialog } from '@/components/change-password-dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -66,8 +67,8 @@ export function Header({ onMenu, onCommand }: { onMenu: () => void; onCommand: (
     (async () => {
       try {
         const [c, p] = await Promise.all([
-          api.get('/customers', { params: { search: debounced, pageSize: 5 } }),
-          api.get('/products', { params: { search: debounced, pageSize: 5 } }),
+          api.get(endpoints.customers.list, { params: { search: debounced, pageSize: 5 } }),
+          api.get(endpoints.products.list, { params: { search: debounced, pageSize: 5 } }),
         ]);
         if (cancelled) return;
         const items: SearchResult[] = [

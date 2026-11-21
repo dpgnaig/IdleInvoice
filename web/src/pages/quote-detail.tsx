@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { AlertTriangle, ArrowLeft, FileText, Loader2, Trash2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -47,11 +48,11 @@ export default function QuoteDetailPage() {
 
   const detail = useQuery({
     queryKey: ['quote', quoteId],
-    queryFn: async () => (await api.get<QuoteDetail>(`/quotes/${quoteId}`)).data,
+    queryFn: async () => (await api.get<QuoteDetail>(endpoints.quotes.byId(quoteId))).data,
   });
 
   const remove = useMutation({
-    mutationFn: async () => api.delete(`/quotes/${quoteId}`),
+    mutationFn: async () => api.delete(endpoints.quotes.byId(quoteId)),
     onSuccess: () => {
       toast.success('Đã xóa báo giá');
       void qc.invalidateQueries({ queryKey: ['quotes'] });

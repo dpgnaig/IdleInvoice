@@ -137,6 +137,10 @@ async function processQuoteFiles(
       const base = matchQuote(parsed.data);
       updateFile(jobId, i, { stage: 'ai', pct: 55 });
       const ai = await enrichWithAi(parsed.data, base.lines.map((l) => l.productMatch));
+      // Hiện provider đã dùng ngay trên thanh tiến trình, trước khi bước tra MST xong
+      if (ai?.status.providers.length) {
+        updateFile(jobId, i, { aiProviders: ai.status.providers });
+      }
       const draft = buildDraft(parsed.data, f.originalname, fileHash, ai, base);
 
       // MST có trong file nhưng chưa có trong DSKH -> tra VietQR (không phụ thuộc AI)
@@ -243,7 +247,14 @@ async function processQuoteFiles(
             paymentTerms: draft.parsed.payment_terms,
             validityDays: draft.parsed.validity_days,
           },
-          ai: ai ? { ran: ai.status.ran, lines: ai.status.lines ?? 0, notes: ai.status.notes } : null,
+          ai: ai
+            ? {
+                ran: ai.status.ran,
+                lines: ai.status.lines ?? 0,
+                notes: ai.status.notes,
+                providers: ai.status.providers,
+              }
+            : null,
           customerSuggestion,
         },
       });
@@ -301,7 +312,7 @@ const confirmLineSchema = z.object({
 });
 
 const confirmSchema = z.object({
-  quoteNo: z.string().trim().min(1, 'Số báo giá không được để trống'),
+  quoteNo: z.string().trim().max(120).optional().default(''),
   quoteDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ngày báo giá phải dạng yyyy-mm-dd').nullable().default(null),
   customerId: z.number().int().positive('Vui lòng chọn khách hàng'),
   fileHash: z.string().min(1),
@@ -315,11 +326,34 @@ const confirmSchema = z.object({
   aliasText: z.string().optional(),
 });
 
+/** Mã báo giá tự sinh khi người dùng để trống; đảm bảo không trùng. */
+function nextQuoteNo(db: ReturnType<typeof getDb>): string {
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  for (let n = 1; n <= 999; n++) {
+    const candidate = `BG-${day}-${String(n).padStart(3, '0')}`;
+    if (!db.select({ id: quotes.id }).from(quotes).where(eq(quotes.quoteNo, candidate)).get()) {
+      return candidate;
+    }
+  }
+  return `BG-${Date.now()}`;
+}
+
 quotesRouter.post(
   '/confirm',
   asyncHandler(async (req, res) => {
     const payload = confirmSchema.parse(req.body);
     const db = getDb();
+
+    const qf = db.select().from(quoteFiles).where(eq(quoteFiles.fileHash, payload.fileHash)).get();
+    const parsed = qf?.parsedJson ? (JSON.parse(qf.parsedJson) as never) : null;
+
+    // Số báo giá không bắt buộc: lấy số đọc được từ file, nếu vẫn trống thì tự sinh
+    if (!payload.quoteNo) {
+      const fromFile = String((parsed as { quote_no?: string } | null)?.quote_no ?? '').trim();
+      const available =
+        fromFile && !db.select().from(quotes).where(eq(quotes.quoteNo, fromFile)).get();
+      payload.quoteNo = available ? fromFile : nextQuoteNo(db);
+    }
 
     const dupQuote = db.select().from(quotes).where(eq(quotes.quoteNo, payload.quoteNo)).get();
     if (dupQuote) throw conflict(`Số báo giá "${payload.quoteNo}" đã tồn tại`, { id: dupQuote.id });
@@ -331,9 +365,6 @@ quotesRouter.post(
       const p = db.select().from(products).where(eq(products.id, l.productId)).get();
       if (!p) throw badRequest(`Không tìm thấy hàng hóa id=${l.productId}`);
     }
-
-    const qf = db.select().from(quoteFiles).where(eq(quoteFiles.fileHash, payload.fileHash)).get();
-    const parsed = qf?.parsedJson ? (JSON.parse(qf.parsedJson) as never) : null;
 
     const result = confirmDraft(payload as never, req.user!.id, parsed);
     writeAudit(req.user!.id, 'create', 'quote', result.quote.id, {

@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import {
-  AlertTriangle, CheckCircle2, FileText, FileUp, Info, ListChecks, Loader2, Plus, SearchCheck,
-  Trash2, UploadCloud, X, XCircle,
+  AlertTriangle, Bot, Building2, CheckCircle2, ChevronDown, ChevronUp, FileText, FileUp, Info,
+  ListChecks, Loader2, Package, Plus, SearchCheck, Trash2, UploadCloud, X, XCircle,
 } from 'lucide-react';
+import { DatePicker } from '@/components/ui/date-picker';
 import { api, apiErrorMessage } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { cn, formatMoney, todayIso } from '@/lib/utils';
 import { PageHeader } from '@/components/layout/page-header';
 import { Combobox, type ComboOption } from '@/components/ui/combobox';
@@ -19,8 +21,7 @@ import { Field } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { NativeSelect } from '@/components/ui/native-select';
 import { Badge } from '@/components/ui/badge';
-import { Card } from '@/components/ui/card';
-import { EmptyState } from '@/components/ui/empty-state';
+import { Skeleton } from '@/components/ui/empty-state';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface PreviewSheet { name: string; rows: string[][] }
@@ -56,7 +57,7 @@ interface Draft {
   customerMatch?: CustomerMatch;
   lines?: DraftLine[];
   warnings?: string[];
-  ai?: { ran: boolean; lines: number; notes: string[] } | null;
+  ai?: { ran: boolean; lines: number; notes: string[]; providers?: string[] } | null;
   customerSuggestion?: { taxCode: string; name: string; address: string; status?: string; source: string } | null;
   parsed?: {
     buyerName: string; buyerTaxCode: string; quoteNo: string; quoteDate: string;
@@ -97,6 +98,8 @@ interface EditableDraft {
   /** Khách AI tìm thấy ngoài danh mục (VietQR) — gợi ý thêm vào DSKH. */
   customerSuggestion: { taxCode: string; name: string; address: string; status?: string } | null;
   aiNotes: string[];
+  /** Provider/model AI đã thực sự trả lời cho file này. */
+  aiProviders: string[];
   rememberCustomer: boolean;
   warnings: string[];
   lines: EditableLine[];
@@ -130,7 +133,7 @@ const STAGE_LABEL: Record<string, string> = {
   error: 'Lỗi',
 };
 
-interface JobFileView { name: string; stage: string; pct: number; message?: string }
+interface JobFileView { name: string; stage: string; pct: number; message?: string; aiProviders?: string[] }
 interface JobView { id: string; status: 'running' | 'done'; files: JobFileView[]; drafts?: Draft[] }
 
 export default function QuoteImportPage() {
@@ -142,13 +145,15 @@ export default function QuoteImportPage() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<EditableDraft[]>([]);
   const [newCustomerFor, setNewCustomerFor] = useState<number | null>(null);
+  const [progressMinimized, setProgressMinimized] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const jobQuery = useQuery({
     queryKey: ['quote-job', jobId],
     enabled: Boolean(jobId),
     queryFn: async () => {
-      const { data } = await api.get(`/quotes/jobs/${jobId}`);
+      if (!jobId) throw new Error('Thiếu mã phiên xử lý');
+      const { data } = await api.get(endpoints.quotes.job(jobId));
       return data as JobView;
     },
     refetchInterval: (q) => (q.state.data?.status === 'running' ? 700 : false),
@@ -194,7 +199,7 @@ export default function QuoteImportPage() {
     setUploadPct(0);
     setUploadNames(arr.map((f) => f.name));
     try {
-      const { data } = await api.post('/quotes/parse', fd, {
+      const { data } = await api.post(endpoints.quotes.parse, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (e) => setUploadPct(e.total ? Math.round((e.loaded / e.total) * 100) : 40),
       });
@@ -220,11 +225,11 @@ export default function QuoteImportPage() {
   const removeDraft = (idx: number) => setDrafts((ds) => ds.filter((_, i) => i !== idx));
 
   const canConfirm = (d: EditableDraft) =>
-    !d.failed && d.customerId !== null && d.quoteNo.trim().length > 0 &&
+    !d.failed && d.customerId !== null &&
     d.lines.length > 0 && d.lines.every((l) => l.productId !== null && (l.qty ?? 0) > 0);
 
   const confirmOne = async (d: EditableDraft) => {
-    await api.post('/quotes/confirm', {
+    await api.post(endpoints.quotes.confirm, {
       quoteNo: d.quoteNo,
       quoteDate: d.quoteDate || null,
       customerId: d.customerId,
@@ -264,76 +269,81 @@ export default function QuoteImportPage() {
   const readyCount = drafts.filter(canConfirm).length;
   const showProcessing = uploading || Boolean(jobId && (!job || job.status === 'running'));
 
+  // File đang xử lý: hiện skeleton thay cho vị trí thẻ báo giá tương ứng
+  const processingFiles: JobFileView[] = job?.files
+    ?? uploadNames.map((name) => ({ name, stage: uploading ? 'uploading' : 'queued', pct: uploadPct }));
+
+  // Panel tiến trình nổi ở góc màn hình: mở rộng khi bắt đầu xử lý, người dùng
+  // thu nhỏ được nhưng không bị mất khi bấm ra ngoài.
+  useEffect(() => {
+    if (showProcessing) setProgressMinimized(false);
+  }, [showProcessing]);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         title="Nhập báo giá"
-        description="Tải báo giá PDF/Excel/Word; hệ thống đọc dữ liệu, ghép khách hàng và mã hàng, AI đối chiếu rồi bạn xác nhận."
-        actions={
-          drafts.length > 0 && (
-            <Button
-              disabled={readyCount === 0 || confirmAll.isPending}
-              onClick={() => void confirmAll.mutateAsync()}
-            >
-              {confirmAll.isPending && <Loader2 className="animate-spin" />}
-              Xác nhận tất cả ({readyCount})
-            </Button>
-          )
-        }
+        description="Đọc PDF/Excel/Word, ghép khách hàng và mã hàng, AI kiểm tra lại rồi bạn xác nhận."
       />
 
-      <motion.label
-        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(e) => { e.preventDefault(); setDragging(false); void handleFiles(e.dataTransfer.files); }}
-        animate={dragging ? { scale: 1.005 } : { scale: 1 }}
-        className={cn(
-          'relative block cursor-pointer overflow-hidden rounded-2xl border-2 border-dashed transition-colors',
-          dragging ? 'border-primary bg-primary/5' : 'border-border bg-card hover:border-primary/40 hover:bg-muted/30',
-        )}
-      >
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-sky-500/5" />
-        <div className="relative flex flex-col items-center gap-4 px-6 py-10 text-center sm:flex-row sm:text-left">
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-            <UploadCloud className="h-7 w-7" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold">Kéo thả báo giá hoặc bấm để chọn file</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Tự đọc dữ liệu, ghép khách hàng và mã hàng, AI kiểm tra lại trước khi bạn xác nhận.
-            </p>
-            <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5 sm:justify-start">
+      {/* Khi đang xử lý thì ẩn vùng kéo-thả lớn, chỉ giữ panel tiến trình nổi */}
+      {!showProcessing && (
+        <motion.label
+          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => { e.preventDefault(); setDragging(false); void handleFiles(e.dataTransfer.files); }}
+          animate={dragging ? { scale: 1.004 } : { scale: 1 }}
+          className={cn(
+            'relative block cursor-pointer overflow-hidden rounded-2xl border bg-card shadow-sm transition-colors',
+            dragging ? 'border-primary ring-2 ring-primary/20' : 'border-border/80 hover:border-primary/40',
+          )}
+        >
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-sky-500/5" />
+          <div className="relative flex flex-col items-center gap-5 px-6 py-8 text-center sm:flex-row sm:text-left">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+              <UploadCloud className="h-6 w-6" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold">
+                {drafts.length > 0 ? 'Tải thêm báo giá' : 'Kéo thả báo giá vào đây'}
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                PDF, Excel hoặc Word · tối đa 10 file mỗi lần · 10 MB mỗi file
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-1.5 sm:justify-end">
               {['PDF', 'XLSX', 'XLS', 'DOCX'].map((f) => (
                 <span key={f} className="rounded-md border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                   {f}
                 </span>
               ))}
-              <span className="text-[10px] text-muted-foreground">tối đa 10 MB/file · 10 file/lần</span>
+              <span className="ml-1 inline-flex h-9 items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium shadow-sm">
+                <FileUp className="h-4 w-4" /> Chọn file
+              </span>
             </div>
           </div>
-          <span className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium">
-            <FileUp className="h-4 w-4" /> Chọn file
-          </span>
-        </div>
-        {dragging && (
-          <motion.div
-            className="pointer-events-none absolute inset-0 rounded-2xl border-2 border-primary"
-            animate={{ opacity: [0.4, 1, 0.4] }}
-            transition={{ repeat: Infinity, duration: 1.6 }}
+          {dragging && (
+            <motion.div
+              className="pointer-events-none absolute inset-0 rounded-2xl border-2 border-primary"
+              animate={{ opacity: [0.4, 1, 0.4] }}
+              transition={{ repeat: Infinity, duration: 1.6 }}
+            />
+          )}
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            accept=".pdf,.xlsx,.xls,.docx"
+            className="sr-only"
+            onChange={(e) => { void handleFiles(e.target.files); e.target.value = ''; }}
           />
-        )}
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept=".pdf,.xlsx,.xls,.docx"
-          className="sr-only"
-          onChange={(e) => { void handleFiles(e.target.files); e.target.value = ''; }}
-        />
-      </motion.label>
+        </motion.label>
+      )}
 
       {showProcessing && (
-        <ProcessingPanel
+        <FloatingProgress
+          minimized={progressMinimized}
+          onToggle={() => setProgressMinimized((m) => !m)}
           uploading={uploading}
           uploadPct={uploadPct}
           uploadNames={uploadNames}
@@ -342,19 +352,33 @@ export default function QuoteImportPage() {
       )}
 
       {drafts.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Badge variant="secondary">{drafts.length} báo giá</Badge>
-            {readyCount > 0 && <Badge variant="success">{readyCount} sẵn sàng</Badge>}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-4 py-2.5 shadow-sm">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            <span className="font-medium text-foreground">{drafts.length} báo giá</span>
+            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" /> {readyCount} sẵn sàng
+            </span>
             {drafts.length - readyCount > 0 && (
-              <Badge variant="warning">{drafts.length - readyCount} cần kiểm tra</Badge>
+              <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5" /> {drafts.length - readyCount} cần kiểm tra
+              </span>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">Kiểm tra khách hàng và mã hàng trước khi xác nhận.</p>
+          <Button
+            size="sm"
+            disabled={readyCount === 0 || confirmAll.isPending}
+            onClick={() => void confirmAll.mutateAsync()}
+          >
+            {confirmAll.isPending && <Loader2 className="animate-spin" />}
+            Xác nhận tất cả ({readyCount})
+          </Button>
         </div>
       )}
 
-      <div className="space-y-6">
+      <div className="space-y-5">
+        {showProcessing && processingFiles.map((f, i) => (
+          <DraftSkeleton key={`${f.name}-${i}`} file={f} />
+        ))}
         <AnimatePresence>
           {drafts.map((d, idx) => (
             <motion.div
@@ -387,15 +411,6 @@ export default function QuoteImportPage() {
             </motion.div>
           ))}
         </AnimatePresence>
-
-        {drafts.length === 0 && !showProcessing && (
-          <Card>
-            <EmptyState
-              title="Chưa có báo giá nào"
-              description="Tải lên báo giá PDF, Excel hoặc Word để bắt đầu. Tiến trình đọc file, ghép danh mục và AI kiểm tra sẽ hiện ngay tại đây."
-            />
-          </Card>
-        )}
       </div>
 
       <NewCustomerDialog
@@ -425,6 +440,56 @@ export default function QuoteImportPage() {
   );
 }
 
+/** Panel tiến trình nổi, thu nhỏ được, không biến mất khi bấm ra ngoài. */
+function FloatingProgress({
+  minimized, onToggle, uploading, uploadPct, uploadNames, job,
+}: {
+  minimized: boolean;
+  onToggle: () => void;
+  uploading: boolean;
+  uploadPct: number;
+  uploadNames: string[];
+  job?: JobView;
+}) {
+  if (minimized) {
+    return (
+      <div className="fixed bottom-4 right-4 z-50 print:hidden">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex items-center gap-2 rounded-full border bg-card px-4 py-2 text-sm font-medium shadow-lg transition-colors hover:bg-accent"
+          aria-label="Mở rộng tiến trình xử lý"
+        >
+          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+          Đang xử lý…
+          <ChevronUp className="h-4 w-4 text-muted-foreground" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed bottom-4 right-4 z-50 w-[min(440px,calc(100vw-2rem))] print:hidden">
+      <div className="overflow-hidden rounded-xl border bg-card text-card-foreground shadow-2xl">
+        <div className="flex items-center justify-between gap-2 border-b bg-muted/40 px-4 py-2">
+          <span className="text-sm font-semibold">Tiến trình xử lý</span>
+          <Button variant="ghost" size="icon" onClick={onToggle} aria-label="Thu nhỏ" title="Thu nhỏ">
+            <ChevronDown />
+          </Button>
+        </div>
+        <div className="max-h-[60vh] overflow-y-auto">
+          <ProcessingPanel
+            uploading={uploading}
+            uploadPct={uploadPct}
+            uploadNames={uploadNames}
+            job={job}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Bảng tiến trình xử lý từng file: đọc dữ liệu → ghép danh mục → AI → tra MST. */
 function ProcessingPanel({
   uploading, uploadPct, uploadNames, job,
@@ -440,7 +505,7 @@ function ProcessingPanel({
   const stageIndex = (stage: string) => STAGES.findIndex((s) => s.key === stage);
 
   return (
-    <Card className="overflow-hidden">
+    <div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-5 py-3">
         <div className="flex items-center gap-2">
           {running ? (
@@ -502,12 +567,17 @@ function ProcessingPanel({
                   ))}
                 </div>
               )}
+              {f.aiProviders && f.aiProviders.length > 0 && (
+                <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px] text-sky-700 dark:text-sky-400">
+                  <Bot className="h-3 w-3 shrink-0" /> AI: {f.aiProviders.join(' · ')}
+                </p>
+              )}
               {f.message && <p className="mt-1.5 text-xs text-destructive">{f.message}</p>}
             </li>
           );
         })}
       </ul>
-    </Card>
+    </div>
   );
 }
 
@@ -516,7 +586,7 @@ function toEditable(d: Draft): EditableDraft {
     return {
       fileHash: d.fileHash, fileName: d.originalName, failed: { message: d.message ?? 'Không đọc được file' },
       buyerName: '', buyerTaxCode: '', quoteNo: '', quoteDate: '', customerId: null,
-      customer: null, customerCandidates: [], customerSuggestion: null, aiNotes: [],
+      customer: null, customerCandidates: [], customerSuggestion: null, aiNotes: [], aiProviders: [],
       rememberCustomer: true, warnings: [], lines: [],
       declared: { subtotal: null, vat: null, total: null },
     };
@@ -552,6 +622,7 @@ function toEditable(d: Draft): EditableDraft {
     customerCandidates: cm.candidates ?? [],
     customerSuggestion: d.customerSuggestion ?? null,
     aiNotes: d.ai?.notes ?? [],
+    aiProviders: d.ai?.providers ?? [],
     rememberCustomer: true,
     warnings: d.warnings ?? [],
     lines,
@@ -580,7 +651,7 @@ function CustomerField({
   const remote = useQuery({
     queryKey: ['customer-pick', debouncedSearch],
     queryFn: async () => {
-      const { data } = await api.get('/customers', {
+      const { data } = await api.get(endpoints.customers.list, {
         params: { search: debouncedSearch, pageSize: 20 },
       });
       return data.data as CustomerLite[];
@@ -591,7 +662,7 @@ function CustomerField({
   const taxQuery = useQuery({
     queryKey: ['customer-by-tax', debouncedTax],
     queryFn: async () => {
-      const { data } = await api.get('/customers', {
+      const { data } = await api.get(endpoints.customers.list, {
         params: { search: debouncedTax, pageSize: 20 },
       });
       const rows = data.data as CustomerLite[];
@@ -818,7 +889,7 @@ function NewCustomerDialog({
     setNote(null);
     setLookupStatus(null);
     try {
-      const { data } = await api.post('/customers/lookup-tax', { taxCode: taxCode.trim() });
+      const { data } = await api.post(endpoints.customers.lookupTax, { taxCode: taxCode.trim() });
       // 1. Đã có trong danh mục -> không tạo trùng
       if (data.inDb) {
         setFromLookup(false);
@@ -859,7 +930,7 @@ function NewCustomerDialog({
     }
     setSaving(true);
     try {
-      const { data } = await api.post('/customers', {
+      const { data } = await api.post(endpoints.customers.list, {
         taxCode: taxCode.trim(),
         name: name.trim(),
         address: address.trim(),
@@ -959,7 +1030,7 @@ function ProductField({
   const remote = useQuery({
     queryKey: ['product-pick', query],
     queryFn: async () => {
-      const { data } = await api.get('/products', { params: { search: query, pageSize: 20 } });
+      const { data } = await api.get(endpoints.products.list, { params: { search: query, pageSize: 20 } });
       return data.data as MatchCandidate[];
     },
   });
@@ -1081,7 +1152,7 @@ function NewProductDialog({
     }
     setSaving(true);
     try {
-      const { data } = await api.post('/products', {
+      const { data } = await api.post(endpoints.products.list, {
         code: code.trim(),
         name: name.trim(),
         unit: unit.trim(),
@@ -1129,6 +1200,69 @@ function NewProductDialog({
   );
 }
 
+/** Thẻ chờ cho một báo giá đang đọc — giữ chỗ đúng kích thước thẻ thật để không nhảy layout. */
+function DraftSkeleton({ file }: { file: JobFileView }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      aria-busy="true"
+      className="overflow-hidden rounded-xl border bg-card shadow-sm"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/20 px-4 py-3 sm:px-5">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+            <FileText className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-muted-foreground" title={file.name}>
+              {file.name}
+            </p>
+            <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin text-primary" />
+              {STAGE_LABEL[file.stage] ?? file.stage}
+              <span className="tabular-nums">· {Math.max(0, Math.min(100, file.pct))}%</span>
+            </p>
+          </div>
+        </div>
+        <Skeleton className="h-8 w-24" />
+      </div>
+
+      <div className="space-y-4 p-4 sm:p-5">
+        <div className="overflow-hidden rounded-xl border">
+          <div className="border-b bg-muted/20 px-4 py-2.5">
+            <Skeleton className="h-4 w-32" />
+          </div>
+          <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="space-y-3">
+              <Skeleton className="h-3 w-20" />
+              <Skeleton className="h-9 w-full" />
+              <Skeleton className="h-9 w-3/4" />
+            </div>
+            <div className="space-y-3">
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-9 w-full" />
+              <Skeleton className="h-9 w-full" />
+            </div>
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded-xl border">
+          <div className="flex items-center justify-between border-b bg-muted/20 px-4 py-2.5">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-8 w-24" />
+          </div>
+          <div className="space-y-3 p-4">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-9 w-full" />
+            ))}
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 function DraftCard({
   draft, onChange, onLineChange, onRemove, canConfirm, onConfirm, onNewCustomer,
 }: {
@@ -1152,13 +1286,13 @@ function DraftCard({
       setPreviewOpen(true);
       if (previewUrl || sheetPreview) return;
       if (isPdf) {
-        const res = await api.get(`/quotes/file/${draft.fileHash}`, { responseType: 'blob' });
+        const res = await api.get(endpoints.quotes.file(draft.fileHash), { responseType: 'blob' });
         setPreviewUrl(URL.createObjectURL(res.data as Blob));
         return;
       }
       // Excel/Word: lấy dữ liệu thô từ parser, hiển thị như trình xem
       setPreviewLoading(true);
-      const res = await api.get(`/quotes/preview/${draft.fileHash}`);
+      const res = await api.get(endpoints.quotes.preview(draft.fileHash));
       setSheetPreview(res.data as PreviewDoc);
     } catch (e) {
       setPreviewOpen(false);
@@ -1199,26 +1333,40 @@ function DraftCard({
 
   return (
     <div>
-      {/* Thanh tiêu đề: tên file, trạng thái, thao tác */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+      {/* Thanh tiêu đề: tên file, trạng thái, provider AI, thao tác */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/20 px-4 py-3 sm:px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <span
+            className={cn(
+              'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+              draft.failed ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary',
+            )}
+          >
             <FileText className="h-4 w-4" />
           </span>
-          <span className="truncate text-sm font-semibold" title={draft.fileName}>{draft.fileName}</span>
-          {draft.failed ? (
-            <Badge variant="destructive">Lỗi đọc file</Badge>
-          ) : canConfirm ? (
-            <Badge variant="success">
-              <CheckCircle2 className="mr-1 h-3 w-3" /> Sẵn sàng
-            </Badge>
-          ) : (
-            issues.map((m) => (
-              <Badge key={m} variant="warning">{m}</Badge>
-            ))
-          )}
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold" title={draft.fileName}>{draft.fileName}</p>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              {draft.failed ? (
+                <Badge variant="destructive">Lỗi đọc file</Badge>
+              ) : canConfirm ? (
+                <Badge variant="success">
+                  <CheckCircle2 className="h-3 w-3" /> Sẵn sàng
+                </Badge>
+              ) : (
+                issues.map((m) => (
+                  <Badge key={m} variant="warning">{m}</Badge>
+                ))
+              )}
+              {draft.aiProviders.map((p) => (
+                <Badge key={p} variant="info" className="font-mono text-[10px]">
+                  <Bot className="h-3 w-3" /> {p}
+                </Badge>
+              ))}
+            </div>
+          </div>
         </div>
-        <div className="flex items-center justify-end gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
           {!draft.failed && (
             <Button
               size="sm"
@@ -1226,10 +1374,16 @@ function DraftCard({
               onClick={() => (previewOpen ? setPreviewOpen(false) : void openOriginal())}
               aria-pressed={previewOpen}
             >
-              <FileUp /> {previewOpen ? 'Ẩn file gốc' : 'Xem file gốc'}
+              <FileUp /> {previewOpen ? 'Ẩn file gốc' : 'File gốc'}
             </Button>
           )}
-          <Button variant="ghost" size="sm" onClick={onRemove} aria-label="Bỏ thẻ này">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onRemove}
+            aria-label="Bỏ thẻ này"
+            className="text-muted-foreground hover:text-destructive"
+          >
             <X /> Bỏ
           </Button>
           <Button
@@ -1250,7 +1404,7 @@ function DraftCard({
         </div>
       ) : (
         <div className={cn('grid', previewOpen && '2xl:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)]')}>
-          <div className="min-w-0 space-y-6 p-5">
+          <div className="min-w-0 space-y-4 p-4 sm:p-5">
             {draft.warnings.length > 0 && (
               <ul className="space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
                 {draft.warnings.map((w, i) => (
@@ -1272,45 +1426,53 @@ function DraftCard({
             )}
 
             {/* Khách hàng & thông tin chứng từ */}
-            <section className="space-y-3">
-              <SectionTitle>Khách hàng</SectionTitle>
-              <CustomerField draft={draft} onChange={onChange} onNewCustomer={onNewCustomer} />
-              <div className="grid items-start gap-4 sm:grid-cols-2 md:grid-cols-[220px_220px]">
-                <Field label="Số báo giá" htmlFor={`qno-${draft.fileHash}`}>
-                  <Input
-                    id={`qno-${draft.fileHash}`}
-                    value={draft.quoteNo}
-                    onChange={(e) => onChange({ quoteNo: e.target.value })}
-                  />
-                </Field>
-                <Field label="Ngày báo giá" htmlFor={`qdate-${draft.fileHash}`}>
-                  <Input
-                    id={`qdate-${draft.fileHash}`}
-                    type="date"
-                    value={draft.quoteDate}
-                    onChange={(e) => onChange({ quoteDate: e.target.value })}
-                  />
-                </Field>
+            <section className="overflow-hidden rounded-xl border">
+              <div className="flex items-center gap-2 border-b bg-muted/20 px-4 py-2.5">
+                <Building2 className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-semibold">Thông tin báo giá</h3>
+              </div>
+              <div className="grid gap-5 p-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+                <CustomerField draft={draft} onChange={onChange} onNewCustomer={onNewCustomer} />
+                <div className="grid content-start gap-4 sm:grid-cols-2 lg:grid-cols-1">
+                  <Field label="Số báo giá" htmlFor={`qno-${draft.fileHash}`}>
+                    <Input
+                      id={`qno-${draft.fileHash}`}
+                      value={draft.quoteNo}
+                      onChange={(e) => onChange({ quoteNo: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Ngày báo giá" htmlFor={`qdate-${draft.fileHash}`}>
+                    <DatePicker
+                      id={`qdate-${draft.fileHash}`}
+                      value={draft.quoteDate}
+                      onChange={(v) => onChange({ quoteDate: v })}
+                    />
+                  </Field>
+                </div>
               </div>
             </section>
 
             {/* Dòng hàng */}
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <SectionTitle>Hàng hóa ({draft.lines.length})</SectionTitle>
-                <Button variant="ghost" size="sm" onClick={addLine}>
+            <section className="overflow-hidden rounded-xl border">
+              <div className="flex items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2">
+                <div className="flex items-center gap-2">
+                  <Package className="h-4 w-4 text-muted-foreground" />
+                  <h3 className="text-sm font-semibold">Hàng hóa</h3>
+                  <Badge variant="secondary">{draft.lines.length}</Badge>
+                </div>
+                <Button variant="outline" size="sm" onClick={addLine}>
                   <Plus /> Thêm dòng
                 </Button>
               </div>
-              <Table containerClassName="rounded-lg border" className="min-w-[760px]">
-                  <TableHeader className="bg-muted/50">
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead className="w-10 px-3 text-center">#</TableHead>
-                      <TableHead className="px-3">Hàng hóa</TableHead>
-                      <TableHead className="w-24 px-3 text-right">SL</TableHead>
-                      <TableHead className="w-36 px-3 text-right">Đơn giá</TableHead>
-                      <TableHead className="w-28 px-3">Thuế</TableHead>
-                      <TableHead className="w-36 px-3 text-right">Thành tiền</TableHead>
+              <Table containerClassName="overflow-x-auto" className="min-w-[820px]">
+                  <TableHeader>
+                    <TableRow className="bg-transparent hover:bg-transparent">
+                      <TableHead className="w-10 px-3 text-center text-[11px] uppercase tracking-wide">#</TableHead>
+                      <TableHead className="px-3 text-[11px] uppercase tracking-wide">Hàng hóa</TableHead>
+                      <TableHead className="w-20 px-2 text-right text-[11px] uppercase tracking-wide">SL</TableHead>
+                      <TableHead className="w-32 px-2 text-right text-[11px] uppercase tracking-wide">Đơn giá</TableHead>
+                      <TableHead className="w-24 px-2 text-[11px] uppercase tracking-wide">Thuế</TableHead>
+                      <TableHead className="w-32 px-3 text-right text-[11px] uppercase tracking-wide">Thành tiền</TableHead>
                       <TableHead className="w-10 px-2" />
                     </TableRow>
                   </TableHeader>
@@ -1321,10 +1483,10 @@ function DraftCard({
                         className={cn(
                           // TableCell mặc định align-middle -> phải đặt align-top lên từng ô
                           '[&>td]:align-top',
-                          l.productId === null ? 'bg-destructive/5' : lowConfidence(l) && 'bg-amber-500/5',
+                          l.productId === null ? 'bg-destructive/[0.04]' : lowConfidence(l) && 'bg-amber-500/[0.05]',
                         )}
                       >
-                        <TableCell className="px-3 py-3 text-center text-xs tabular-nums leading-9 text-muted-foreground">{i + 1}</TableCell>
+                        <TableCell className="px-3 py-3 text-center text-xs tabular-nums leading-8 text-muted-foreground">{i + 1}</TableCell>
                         <TableCell className="px-3 py-3">
                           <ProductField
                             id={`prod-${draft.fileHash}-${i}`}
@@ -1393,22 +1555,22 @@ function DraftCard({
                             </div>
                           )}
                         </TableCell>
-                        <TableCell className="px-3 py-3">
+                        <TableCell className="px-2 py-3">
                           <Input
                             type="number"
                             step="any"
                             aria-label="Số lượng"
-                            className="px-2 text-right tabular-nums"
+                            className="h-8 px-2 text-right tabular-nums"
                             value={l.qty ?? ''}
                             onChange={(e) => onLineChange(i, { qty: e.target.value ? Number(e.target.value) : null })}
                           />
                         </TableCell>
-                        <TableCell className="px-3 py-3">
+                        <TableCell className="px-2 py-3">
                           <Input
                             type="number"
                             step="1"
                             aria-label="Đơn giá"
-                            className="px-2 text-right tabular-nums"
+                            className="h-8 px-2 text-right tabular-nums"
                             value={l.unitPrice ?? ''}
                             onChange={(e) => onLineChange(i, { unitPrice: e.target.value ? Number(e.target.value) : null })}
                           />
@@ -1418,9 +1580,10 @@ function DraftCard({
                             </p>
                           )}
                         </TableCell>
-                        <TableCell className="px-3 py-3">
+                        <TableCell className="px-2 py-3">
                           <NativeSelect
                             aria-label="Thuế suất"
+                            selectClassName="h-8 text-xs"
                             value={typeof l.taxRate === 'number' ? String(l.taxRate) : l.taxRate}
                             onChange={(e) =>
                               onLineChange(i, {
@@ -1433,7 +1596,7 @@ function DraftCard({
                             ))}
                           </NativeSelect>
                         </TableCell>
-                        <TableCell className="px-3 py-3 text-right font-medium tabular-nums leading-9">
+                        <TableCell className="px-3 py-3 text-right font-medium tabular-nums leading-8">
                           {formatMoney((l.qty ?? 0) * (l.unitPrice ?? 0))}
                         </TableCell>
                         <TableCell className="px-2 py-3">
@@ -1458,18 +1621,19 @@ function DraftCard({
                     )}
                   </TableBody>
               </Table>
-            </section>
-
-            {/* Tổng tiền: so sánh số tính lại với số ghi trên báo giá */}
-            <section className="ml-auto w-full max-w-md rounded-lg border bg-muted/40 p-4 text-sm">
-              <div className="grid grid-cols-[1fr_auto_auto] items-baseline gap-x-6 gap-y-2">
-                <span />
-                <span className="text-right text-[11px] uppercase tracking-wide text-muted-foreground">Tính lại</span>
-                <span className="text-right text-[11px] uppercase tracking-wide text-muted-foreground">Trên báo giá</span>
-                <TotalRow label="Tổng chưa VAT" value={subtotal} declared={draft.declared.subtotal} />
-                <TotalRow label="VAT" value={vat} declared={draft.declared.vat} />
-                <div className="col-span-3 border-t" />
-                <TotalRow label="Tổng thanh toán" value={total} declared={draft.declared.total} strong />
+              {/* Tổng tiền gắn liền bảng hàng: số tính lại so với số trên báo giá */}
+              <div className="flex justify-end border-t bg-muted/20 p-4">
+                <div className="w-full max-w-sm rounded-lg border bg-background p-4 text-sm shadow-sm">
+                  <div className="grid grid-cols-[1fr_auto_auto] items-baseline gap-x-5 gap-y-2">
+                    <span />
+                    <span className="text-right text-[10px] uppercase tracking-wide text-muted-foreground">Tính lại</span>
+                    <span className="text-right text-[10px] uppercase tracking-wide text-muted-foreground">Trên báo giá</span>
+                    <TotalRow label="Tổng chưa VAT" value={subtotal} declared={draft.declared.subtotal} />
+                    <TotalRow label="VAT" value={vat} declared={draft.declared.vat} />
+                    <div className="col-span-3 border-t" />
+                    <TotalRow label="Tổng thanh toán" value={total} declared={draft.declared.total} strong />
+                  </div>
+                </div>
               </div>
             </section>
           </div>
@@ -1511,10 +1675,6 @@ function DraftCard({
       )}
     </div>
   );
-}
-
-function SectionTitle({ children }: { children: ReactNode }) {
-  return <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{children}</h3>;
 }
 
 /**

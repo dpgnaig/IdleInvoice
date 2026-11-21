@@ -34,6 +34,18 @@ export const appSettings = sqliteTable('app_settings', {
   value: text('value').notNull(),
 });
 
+export const aiProviders = sqliteTable('ai_providers', {
+  ...base,
+  name: text('name').notNull(),
+  kind: text('kind', { enum: ['gemini', 'openrouter', 'openai', 'anthropic'] }).notNull(),
+  baseUrl: text('base_url').notNull().default(''),
+  apiKey: text('api_key').notNull().default(''),
+  /** Một hoặc nhiều model, phân tách bằng dấu phẩy — thử lần lượt như chuỗi dự phòng. */
+  model: text('model').notNull().default(''),
+  enabled: integer('enabled').notNull().default(1),
+  sortOrder: integer('sort_order').notNull().default(0),
+});
+
 export const customers = sqliteTable(
   'customers',
   {

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ScrollText, Shield } from 'lucide-react';
+import { Bot, ScrollText, Shield } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
+import AiSettingsPage, { fetchAiProviders } from '@/pages/ai-settings';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/layout/page-header';
@@ -35,17 +37,22 @@ interface AuditRow {
 
 export default function AdminPage() {
   const qc = useQueryClient();
-  const [tab, setTab] = useState<'users' | 'logs'>('users');
+  const [tab, setTab] = useState<'users' | 'logs' | 'ai'>('users');
   const [page, setPage] = useState(1);
   const { ref: tableRef, pageSize } = useAutoPageSize();
   // Số dòng/trang đổi theo kích thước cửa sổ -> quay về trang 1 để không vượt quá số trang
   useEffect(() => setPage(1), [pageSize]);
 
+  // Nạp sẵn cấu hình AI ngay khi mở Quản trị để chuyển tab không bị trống/spinner
+  useEffect(() => {
+    void qc.prefetchQuery({ queryKey: ['ai-providers'], queryFn: fetchAiProviders });
+  }, [qc]);
+
   const users = useQuery({
     queryKey: ['admin-users', page, pageSize],
     placeholderData: keepPreviousData,
     queryFn: async () => {
-      const { data } = await api.get('/admin/users', { params: { page, pageSize } });
+      const { data } = await api.get(endpoints.admin.users, { params: { page, pageSize } });
       return data as { data: AdminUser[]; pagination: { totalPages: number; total: number } };
     },
     enabled: tab === 'users',
@@ -55,7 +62,7 @@ export default function AdminPage() {
     queryKey: ['admin-logs', page, pageSize],
     placeholderData: keepPreviousData,
     queryFn: async () => {
-      const { data } = await api.get('/admin/audit-logs', { params: { page, pageSize } });
+      const { data } = await api.get(endpoints.admin.auditLogs, { params: { page, pageSize } });
       return data as { data: AuditRow[]; pagination: { totalPages: number; total: number } };
     },
     enabled: tab === 'logs',
@@ -69,13 +76,14 @@ export default function AdminPage() {
       options={[
         { value: 'users', label: 'Người dùng', icon: <Shield className="h-3.5 w-3.5" /> },
         { value: 'logs', label: 'Nhật ký', icon: <ScrollText className="h-3.5 w-3.5" /> },
+        { value: 'ai', label: 'AI Agent', icon: <Bot className="h-3.5 w-3.5" /> },
       ]}
     />
   );
 
   const patch = useMutation({
     mutationFn: async ({ id, body }: { id: number; body: Record<string, string> }) =>
-      api.patch(`/admin/users/${id}`, body),
+      api.patch(endpoints.admin.user(id), body),
     onSuccess: () => {
       toast.success('Đã cập nhật tài khoản');
       void qc.invalidateQueries({ queryKey: ['admin-users'] });
@@ -143,11 +151,20 @@ export default function AdminPage() {
 
   return (
     <div>
-      <PageHeader title="Quản trị" description="Quản lý người dùng và nhật ký thao tác." />
-      {tab === 'users' ? (
+      <PageHeader title="Quản trị" description="Quản lý người dùng, cấu hình AI và nhật ký thao tác." />
+
+      {/* Tab ở tab AI nằm chung hàng với nút thao tác (do panel AI render),
+          các tab khác vẫn dùng hàng tab riêng bên dưới tiêu đề. */}
+      {tab !== 'ai' && <div className="mb-3">{tabs}</div>}
+
+      {/* Giữ panel AI mount sẵn (ẩn khi không chọn) để chuyển tab là hiện ngay */}
+      <div className={tab === 'ai' ? '' : 'hidden'} aria-hidden={tab !== 'ai'}>
+        <AiSettingsPage embedded embeddedToolbar={tabs} />
+      </div>
+
+      {tab === 'users' && (
         <DataTable
           cardRef={tableRef}
-          toolbar={tabs}
           footer={
             <Pagination
               page={page}
@@ -166,10 +183,11 @@ export default function AdminPage() {
           loading={users.isLoading}
           empty={<EmptyState title="Không có người dùng" />}
         />
-      ) : (
+      )}
+
+      {tab === 'logs' && (
         <DataTable
           cardRef={tableRef}
-          toolbar={tabs}
           footer={
             <Pagination
               page={page}

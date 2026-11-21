@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { Badge } from '@/components/ui/badge';
 import { useDebounced } from '@/lib/use-debounced';
 import {
@@ -71,8 +72,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     (async () => {
       try {
         const [c, p] = await Promise.all([
-          api.get('/customers', { params: { search: debounced, pageSize: 5 } }),
-          api.get('/products', { params: { search: debounced, pageSize: 5 } }),
+          api.get(endpoints.customers.list, { params: { search: debounced, pageSize: 5 } }),
+          api.get(endpoints.products.list, { params: { search: debounced, pageSize: 5 } }),
         ]);
         if (cancelled) return;
         setEntities([

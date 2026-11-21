@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { KeyRound, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api, apiErrorMessage, tokenStore } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { useAuth } from '@/lib/auth';
 import { Dialog, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -50,7 +51,7 @@ export function ChangePasswordDialog({
 
   const onSubmit = form.handleSubmit(async (values) => {
     try {
-      await api.post('/auth/change-password', {
+      await api.post(endpoints.auth.changePassword, {
         currentPassword: values.currentPassword,
         newPassword: values.newPassword,
       });

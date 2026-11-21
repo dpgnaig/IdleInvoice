@@ -12,7 +12,8 @@ import { getDb } from '../db/index.js';
 import { customers } from '../db/schema.js';
 import { logger } from '../lib/logger.js';
 import { normalizeTaxCode, normalizeText, simplifyCompanyName } from '../lib/normalize.js';
-import { aiComplete, extractJson, mapLimit } from './ai.js';
+import { aiCompleteWithProvider, extractJson, mapLimit } from './ai.js';
+import { aiGlobalEnabled } from './ai-providers.js';
 import type { ParsedQuote } from './parser-client.js';
 import { fetchTaxInfo } from './tax-lookup.js';
 import { candidatesForAi, confidentCustomer, tokenScore, type CustomerMatch, type ProductMatch } from './match.js';
@@ -21,9 +22,16 @@ const AI_BULK_DEADLINE_MS = Number(process.env.AI_BULK_DEADLINE_MS ?? 20_000);
 const AI_LINES_DEADLINE_MS = Number(process.env.AI_LINES_DEADLINE_MS ?? 20_000);
 const AI_LINE_CONCURRENCY = Number(process.env.AI_LINE_CONCURRENCY ?? 3);
 
+/** Ghi nhận provider đã trả lời; các lần gọi song song cùng provider chỉ ghi một lần. */
+function noteProvider(status: AiStatus, provider: string): void {
+  if (!status.providers.includes(provider)) status.providers.push(provider);
+}
+
 export interface AiStatus {
   /** Có ít nhất một provider trả lời trong thời gian cho phép. */
   ran: boolean;
+  /** Provider/model đã thực sự trả lời (có thể nhiều nếu lần gọi khác nhau gặp lỗi). */
+  providers: string[];
   /** Đã dùng cho khách hàng. */
   customer?: string;
   /** Số dòng hàng AI đã chỉnh/bổ sung. */
@@ -103,8 +111,10 @@ async function resolveCustomerAi(
     : [];
   const known = shortlist.map(({ c }) => `${c.name} | MST ${c.taxCode}`).join('\n');
 
-  const raw = await aiComplete(CUSTOMER_PROMPT({ name, tax, known }), Date.now() + AI_BULK_DEADLINE_MS);
-  if (!raw) return undefined;
+  const res = await aiCompleteWithProvider(CUSTOMER_PROMPT({ name, tax, known }), Date.now() + AI_BULK_DEADLINE_MS);
+  if (!res) return undefined;
+  noteProvider(status, res.provider);
+  const raw = res.text;
   const parsed = extractJson<CustomerAiResponse>(raw);
   if (!parsed) return undefined;
 
@@ -227,10 +237,9 @@ async function suggestLine(
   productMatch: ProductMatch,
   status: AiStatus,
 ): Promise<LineSuggestion | undefined> {
-  // Không có ứng viên tất định, đã ghép chắc chắn và tên đủ rõ -> không tốn lượt gọi
-  const needsSplit = Boolean(line.spec_text && line.spec_text.length > line.name.length * 1.5) || !line.brand;
+  // Luôn gọi AI cho từng dòng để kiểm tra lại kết quả ghép tất định —
+  // kể cả dòng đã ghép chắc chắn vẫn có thể bị tách tên/model sai.
   const detCandidates = productMatch.candidates ?? [];
-  if (!detCandidates.length && !needsSplit && productMatch.status === 'matched') return undefined;
 
   // Ứng viên rộng từ TOÀN BỘ danh mục để LLM có thể chọn mã ngoài top-5 tất định
   const wide = candidatesForAi(line, 20);
@@ -238,7 +247,7 @@ async function suggestLine(
     ? wide
     : detCandidates.map((c) => ({ id: c.id, code: c.code, name: c.name, unit: c.unit }));
 
-  const raw = await aiComplete(
+  const res = await aiCompleteWithProvider(
     LINE_PROMPT({
       line: {
         name: line.name,
@@ -252,22 +261,23 @@ async function suggestLine(
     }),
     Date.now() + AI_LINES_DEADLINE_MS,
   );
-  if (!raw) return undefined;
-  const res = extractJson<LineAiResponse>(raw);
   if (!res) return undefined;
+  noteProvider(status, res.provider);
+  const parsed = extractJson<LineAiResponse>(res.text);
+  if (!parsed) return undefined;
 
   const suggestion: LineSuggestion = {};
   const assign = (key: 'name' | 'brand' | 'model' | 'desc', value?: string) => {
     const v = (value ?? '').trim();
     if (v && v !== '(không có)') suggestion[key] = v;
   };
-  assign('name', res.name);
-  assign('brand', res.brand);
-  assign('model', res.model);
-  assign('desc', res.desc);
+  assign('name', parsed.name);
+  assign('brand', parsed.brand);
+  assign('model', parsed.model);
+  assign('desc', parsed.desc);
 
   // Chỉ chấp nhận id nằm trong danh sách ứng viên — chặn LLM bịa mã hàng
-  const picked = typeof res.productId === 'number' ? candidates.find((c) => c.id === res.productId) : undefined;
+  const picked = typeof parsed.productId === 'number' ? candidates.find((c) => c.id === parsed.productId) : undefined;
   if (picked) {
     suggestion.productId = picked.id;
     suggestion.product = { id: picked.id, code: picked.code, name: picked.name, unit: picked.unit };
@@ -286,9 +296,9 @@ export async function enrichWithAi(
   pq: ParsedQuote,
   lineMatches: ProductMatch[],
 ): Promise<AiEnrichment | undefined> {
-  if (process.env.AI_ENABLED === 'false') return undefined;
+  if (!aiGlobalEnabled()) return undefined;
 
-  const status: AiStatus = { ran: false, notes: [] };
+  const status: AiStatus = { ran: false, providers: [], notes: [] };
   const [customer, lineResults] = await Promise.all([
     resolveCustomerAi(pq, status),
     mapLimit(pq.lines.map((line, i) => ({ line, match: lineMatches[i]! })), Math.max(1, AI_LINE_CONCURRENCY), (item) =>
@@ -296,8 +306,8 @@ export async function enrichWithAi(
     ),
   ]);
 
-  // Có ít nhất một tín hiệu nghĩa là chuỗi provider đã chạy
-  status.ran = Boolean(customer) || status.lines !== undefined;
+  // AI coi như đã chạy khi có ít nhất một provider trả lời, kể cả không tạo ra gợi ý nào
+  status.ran = status.providers.length > 0;
   const lines: Record<number, LineSuggestion> = {};
   lineResults.forEach((s, i) => {
     if (s) lines[i] = s;

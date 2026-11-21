@@ -15,6 +15,8 @@ export interface JobFile {
   stage: JobStage;
   pct: number;
   message?: string;
+  /** Provider/model AI đã trả lời cho file này (hiện khi đã qua bước AI). */
+  aiProviders?: string[];
   /** Draft cuối cùng — không trả ra khi job còn chạy. */
   draft?: unknown;
 }

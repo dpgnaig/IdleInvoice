@@ -10,7 +10,6 @@ import {
   Shield,
   ChevronsLeft,
   ChevronsRight,
-  ReceiptText,
   Sun,
   Moon,
   LogOut,
@@ -48,9 +47,11 @@ export function Sidebar({
   const content = (
     <div className="flex h-full flex-col">
       <div className={cn('flex items-center gap-2.5 px-4 py-5', collapsed && 'justify-center px-2')}>
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-          <ReceiptText className="h-5 w-5" />
-        </div>
+        <img
+          src="/logo.png"
+          alt="IdleInvoice"
+          className="h-9 w-9 shrink-0 rounded-lg object-contain"
+        />
         {!collapsed && (
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold tracking-tight">IdleInvoice</p>

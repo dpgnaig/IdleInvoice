@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { SetupGateContext } from '@/lib/setup-gate';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
@@ -49,7 +50,7 @@ function SetupGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<'checking' | 'needed' | 'done'>('checking');
   useEffect(() => {
     api
-      .get<{ setupCompleted: boolean }>('/setup/status')
+      .get<{ setupCompleted: boolean }>(endpoints.setup.status)
       .then((r) => setState(r.data.setupCompleted ? 'done' : 'needed'))
       // /setup/* trả 403 sau khi hoàn tất => coi như đã thiết lập
       .catch(() => setState('done'));

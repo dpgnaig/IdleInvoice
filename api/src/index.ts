@@ -21,6 +21,7 @@ import { exportRouter } from './routes/export-catalog.js';
 import { quotesRouter } from './routes/quotes.js';
 import { invoicesRouter } from './routes/invoices.js';
 import { adminRouter, customersAdminExtras } from './routes/admin.js';
+import { aiProvidersRouter } from './routes/ai-providers.js';
 import { historyRouter } from './routes/history.js';
 import { purgeExpiredTokens } from './services/tokens.js';
 
@@ -70,6 +71,7 @@ export function createApp() {
   app.use('/api/invoices', requireAuth, invoicesRouter);
   app.use('/api/history', requireAuth, historyRouter);
   app.use('/api/export', requireAuth, exportRouter);
+  app.use('/api/admin/ai-providers', requireAuth, aiProvidersRouter);
   app.use('/api/admin', requireAuth, adminRouter);
   app.use('/api', requireAuth, customersAdminExtras);
 

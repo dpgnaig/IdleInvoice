@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { setupTestEnv } from './helpers.js';
 
@@ -668,79 +668,77 @@ describe('ghép tên công ty + ứng viên cho AI', () => {
 });
 
 describe('bổ sung bằng AI (chuỗi dự phòng + trộn kết quả)', () => {
-  const ENV_KEYS = ['GEMINI_API_KEY', 'GOOGLE_AI_API_KEY', 'OPENROUTER_API_KEY', 'OPENROUTER_MODELS', 'AI_ENABLED', 'AI_ATTEMPT_TIMEOUT_MS'];
-
-  const resetAiEnv = () => {
-    for (const k of ENV_KEYS) delete process.env[k];
+  const raw = getRawDb();
+  const insertProvider = (
+    kind: string,
+    model: string,
+    opts: { baseUrl?: string; apiKey?: string; enabled?: number } = {},
+  ) => {
+    const now = new Date().toISOString();
+    raw
+      .prepare(
+        `INSERT INTO ai_providers (created_at, updated_at, name, kind, base_url, api_key, model, enabled, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(now, now, `test-${kind}`, kind, opts.baseUrl ?? '', opts.apiKey ?? 'k', model, opts.enabled ?? 1, 0);
   };
 
-  it('không cấu hình key -> aiComplete trả null, không throw', async () => {
-    resetAiEnv();
+  afterEach(() => {
+    raw.prepare('DELETE FROM ai_providers').run();
+    raw.prepare("DELETE FROM app_settings WHERE key = 'ai_enabled'").run();
+    delete process.env.AI_ATTEMPT_TIMEOUT_MS;
+  });
+
+  it('chưa cấu hình provider -> aiComplete trả null, không throw', async () => {
     const { aiComplete, aiEnabled, __aiInternals } = await import('../services/ai.js');
     __aiInternals.breakers.clear();
     expect(aiEnabled()).toBe(false);
     await expect(aiComplete('x', Date.now() + 2000)).resolves.toBeNull();
   });
 
-  it('Gemini lỗi -> chuyển OpenRouter; model lỗi vào cầu dao, lần sau bỏ qua', async () => {
-    resetAiEnv();
-    process.env.GEMINI_API_KEY = 'g';
-    process.env.OPENROUTER_API_KEY = 'o';
-    process.env.OPENROUTER_MODELS = 'a:free,b:free';
+  it('model lỗi -> chuyển model kế; model lỗi vào cầu dao, lần sau bỏ qua', async () => {
+    insertProvider('openai', 'a,b', { baseUrl: 'https://llm.local/v1' });
     process.env.AI_ATTEMPT_TIMEOUT_MS = '800';
     const { aiComplete, __aiInternals } = await import('../services/ai.js');
     __aiInternals.breakers.clear();
 
     const called: string[] = [];
-    const realFetch = globalThis.fetch;
-    vi.stubGlobal('fetch', async (url: unknown, init: RequestInit) => {
-      const u = String(url);
-      if (u.includes('generativelanguage')) {
-        called.push('gemini');
-        return new Response('quota', { status: 429 });
-      }
+    vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
       const model = JSON.parse(String(init.body)).model as string;
       called.push(model);
-      if (model === 'a:free') return new Response('boom', { status: 500 });
+      if (model === 'a') return new Response('boom', { status: 500 });
       return new Response(JSON.stringify({ choices: [{ message: { content: '{"ten":"X"}' } }] }), { status: 200 });
     });
 
     try {
       await expect(aiComplete('x', Date.now() + 5000)).resolves.toBe('{"ten":"X"}');
-      expect(called).toEqual(['gemini', 'a:free', 'b:free']);
+      expect(called).toEqual(['a', 'b']);
 
       called.length = 0;
       await aiComplete('x', Date.now() + 5000);
-      expect(called).toEqual(['b:free']);
+      expect(called).toEqual(['b']);
     } finally {
       vi.unstubAllGlobals();
-      globalThis.fetch = realFetch;
       __aiInternals.breakers.clear();
-      resetAiEnv();
     }
   });
 
   it('mọi provider lỗi -> null (báo giá vẫn dùng kết quả ghép tất định)', async () => {
-    resetAiEnv();
-    process.env.GEMINI_API_KEY = 'g';
+    insertProvider('openai', 'm', { baseUrl: 'https://down.local/v1' });
     process.env.AI_ATTEMPT_TIMEOUT_MS = '500';
     const { aiComplete, __aiInternals } = await import('../services/ai.js');
     __aiInternals.breakers.clear();
-    const realFetch = globalThis.fetch;
     vi.stubGlobal('fetch', async () => new Response('down', { status: 503 }));
     try {
       await expect(aiComplete('x', Date.now() + 3000)).resolves.toBeNull();
     } finally {
       vi.unstubAllGlobals();
-      globalThis.fetch = realFetch;
       __aiInternals.breakers.clear();
-      resetAiEnv();
     }
   });
 
   it('AI chỉ chọn mã hàng trong danh sách ứng viên, id bịa bị bỏ qua', async () => {
-    resetAiEnv();
-    process.env.GEMINI_API_KEY = 'g';
+    insertProvider('openai', 'm', { baseUrl: 'https://llm.local/v1' });
     process.env.AI_ATTEMPT_TIMEOUT_MS = '800';
     const { enrichWithAi } = await import('../services/ai-enrich.js');
     const { __aiInternals } = await import('../services/ai.js');
@@ -750,7 +748,7 @@ describe('bổ sung bằng AI (chuỗi dự phòng + trộn kết quả)', () =>
     vi.stubGlobal('fetch', async () =>
       new Response(
         JSON.stringify({
-          candidates: [{ content: { parts: [{ text: '{"name":"Đĩa phân phối khí","model":"HD-270","productId":999999}' }] } }],
+          choices: [{ message: { content: '{"name":"Đĩa phân phối khí","model":"HD-270","productId":999999}' } }],
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
@@ -773,16 +771,16 @@ describe('bổ sung bằng AI (chuỗi dự phòng + trộn kết quả)', () =>
       expect(ai).toBeTruthy();
       expect(ai!.lines[0]?.name).toBe('Đĩa phân phối khí');
       expect(ai!.lines[0]?.productId).toBeUndefined();
+      // Giao diện cần biết provider nào đã thực sự trả lời
+      expect(ai!.status.providers).toContain('openai/m');
     } finally {
       vi.unstubAllGlobals();
       __aiInternals.breakers.clear();
-      resetAiEnv();
     }
   });
 
   it('prompt AI khách hàng chứa ứng viên gần đúng từ toàn bộ danh sách', async () => {
-    resetAiEnv();
-    process.env.GEMINI_API_KEY = 'g';
+    insertProvider('openai', 'm', { baseUrl: 'https://llm.local/v1' });
     process.env.AI_ATTEMPT_TIMEOUT_MS = '800';
     const { enrichWithAi } = await import('../services/ai-enrich.js');
     const { __aiInternals } = await import('../services/ai.js');
@@ -790,13 +788,11 @@ describe('bổ sung bằng AI (chuỗi dự phòng + trộn kết quả)', () =>
 
     let prompt = '';
     vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
-      prompt = String(JSON.parse(String(init.body)).contents[0].parts[0].text);
+      prompt = String((JSON.parse(String(init.body)) as { messages: Array<{ content: string }> }).messages[0]!.content);
       return new Response(
         JSON.stringify({
-          candidates: [{
-            content: {
-              parts: [{ text: '{"name":"CÔNG TY TNHH THƯƠNG MẠI QUANG MINH","taxCode":""}' }],
-            },
+          choices: [{
+            message: { content: '{"name":"CÔNG TY TNHH THƯƠNG MẠI QUANG MINH","taxCode":""}' },
           }],
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -816,17 +812,14 @@ describe('bổ sung bằng AI (chuỗi dự phòng + trộn kết quả)', () =>
     } finally {
       vi.unstubAllGlobals();
       __aiInternals.breakers.clear();
-      resetAiEnv();
     }
   });
 
-  it('AI_ENABLED=false -> tắt hoàn toàn dù có key', async () => {
-    resetAiEnv();
-    process.env.GEMINI_API_KEY = 'g';
-    process.env.AI_ENABLED = 'false';
+  it('tắt AI toàn cục -> enrich trả undefined dù có provider', async () => {
+    insertProvider('openai', 'm', { baseUrl: 'https://llm.local/v1' });
+    setSetting('ai_enabled', 'false');
     const { enrichWithAi } = await import('../services/ai-enrich.js');
     const pq = { buyer_name: '', buyer_tax_code: '', quote_no: '', quote_date: '', lines: [], declared_subtotal: null, declared_vat: null, declared_total: null, tax_rate: null, payment_terms: '', validity_days: null, warnings: [] };
     await expect(enrichWithAi(pq as never, [])).resolves.toBeUndefined();
-    resetAiEnv();
   });
 });

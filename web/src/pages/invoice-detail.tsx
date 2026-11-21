@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { AlertTriangle, ArrowLeft, Loader2, Plus, Save, Trash2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { PageHeader } from '@/components/layout/page-header';
 import { Combobox, type ComboOption } from '@/components/ui/combobox';
 import { CountUpMoney } from '@/components/ui/count-up';
@@ -56,12 +57,12 @@ export default function InvoiceDetailPage() {
 
   const detail = useQuery({
     queryKey: ['invoice', invoiceId],
-    queryFn: async () => (await api.get<InvoiceDetail>(`/invoices/${invoiceId}`)).data,
+    queryFn: async () => (await api.get<InvoiceDetail>(endpoints.invoices.byId(invoiceId))).data,
   });
 
   const customers = useQuery({
     queryKey: ['customers-all'],
-    queryFn: async () => (await api.get('/customers', { params: { pageSize: 200 } })).data.data as Array<{
+    queryFn: async () => (await api.get(endpoints.customers.list, { params: { pageSize: 200 } })).data.data as Array<{
       id: number;
       name: string;
       taxCode: string;
@@ -69,7 +70,7 @@ export default function InvoiceDetailPage() {
   });
   const productsQuery = useQuery({
     queryKey: ['products-all'],
-    queryFn: async () => (await api.get('/products', { params: { pageSize: 200 } })).data.data as Array<{
+    queryFn: async () => (await api.get(endpoints.products.list, { params: { pageSize: 200 } })).data.data as Array<{
       id: number;
       code: string;
       name: string;
@@ -78,7 +79,7 @@ export default function InvoiceDetailPage() {
   });
   const dup = useQuery({
     queryKey: ['invoice-dup', invoiceId],
-    queryFn: async () => (await api.get<{ warnings: string[] }>(`/invoices/${invoiceId}/duplicate-check`)).data.warnings,
+    queryFn: async () => (await api.get<{ warnings: string[] }>(endpoints.invoices.duplicateCheck(invoiceId))).data.warnings,
   });
 
   const [customerId, setCustomerId] = useState<number | null>(null);
@@ -133,7 +134,7 @@ export default function InvoiceDetailPage() {
   const save = useMutation({
     mutationFn: async () => {
       if (!customerId) throw new Error('Vui lòng chọn khách hàng');
-      await api.put(`/invoices/${invoiceId}`, {
+      await api.put(endpoints.invoices.byId(invoiceId), {
         customerId,
         paymentMethod,
         lines: lines.map((l) => ({

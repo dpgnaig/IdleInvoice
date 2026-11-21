@@ -5,8 +5,9 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
-import { CheckCircle2, Loader2, ReceiptText } from 'lucide-react';
+import { CheckCircle2, Loader2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Field } from '@/components/ui/label';
@@ -37,7 +38,7 @@ export default function RegisterPage() {
   const onSubmit = async (values: FormValues) => {
     setServerError('');
     try {
-      const { data } = await api.post('/auth/register', {
+      const { data } = await api.post(endpoints.auth.register, {
         fullName: values.fullName,
         email: values.email,
         password: values.password,
@@ -53,9 +54,7 @@ export default function RegisterPage() {
     <div className="flex min-h-screen items-center justify-center px-5 py-12">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-            <ReceiptText className="h-5 w-5" />
-          </div>
+          <img src="/logo.png" alt="IdleInvoice" className="h-10 w-10 rounded-xl object-contain" />
           <span className="text-lg font-semibold">IdleInvoice</span>
         </div>
 

@@ -1,4 +1,5 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
+import { endpoints } from './endpoints';
 
 /** Access token chỉ giữ trong bộ nhớ (không localStorage). */
 let accessToken: string | null = null;
@@ -30,7 +31,7 @@ export function setUnauthorizedHandler(fn: () => void) {
 async function refresh(): Promise<string | null> {
   if (!refreshing) {
     refreshing = api
-      .post<{ accessToken: string }>('/auth/refresh')
+      .post<{ accessToken: string }>(endpoints.auth.refresh)
       .then((r) => {
         accessToken = r.data.accessToken;
         return r.data.accessToken;

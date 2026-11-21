@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
 import { Download, FileText, Loader2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
+import { endpoints } from '@/lib/endpoints';
 import { DataTable, type Column, type SortState } from '@/components/ui/data-table';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/layout/page-header';
@@ -40,7 +41,7 @@ export default function InvoicesPage() {
     queryKey: ['invoices', status, page, pageSize],
     placeholderData: keepPreviousData,
     queryFn: async () => {
-      const { data } = await api.get('/invoices', {
+      const { data } = await api.get(endpoints.invoices.list, {
         params: { status: status || undefined, page, pageSize },
       });
       return data as { data: InvoiceRow[]; pagination: { page: number; totalPages: number; total: number } };
@@ -116,7 +117,7 @@ export default function InvoicesPage() {
 
   const exportExcel = useMutation({
     mutationFn: async (ids: number[]) => {
-      const res = await api.post('/invoices/export', { ids }, { responseType: 'blob' });
+      const res = await api.post(endpoints.invoices.export, { ids }, { responseType: 'blob' });
       const url = URL.createObjectURL(res.data as Blob);
       const a = document.createElement('a');
       a.href = url;
