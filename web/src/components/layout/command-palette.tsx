@@ -1,14 +1,23 @@
 import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AnimatePresence, motion } from 'framer-motion';
 import {
-  LayoutDashboard, Upload, FileText, Users, Package, History, Shield, Search,
+  LayoutDashboard, Upload, FileText, Users, Package, History, Shield,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
-import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { useDebounced } from '@/lib/use-debounced';
+import {
+  CommandDialog,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandLoading,
+  CommandSeparator,
+  CommandShortcut,
+} from '@/components/ui/command';
 
 const ITEMS = [
   { to: '/', label: 'Tổng quan', icon: LayoutDashboard, adminOnly: false },
@@ -32,13 +41,13 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const { user } = useAuth();
   const [query, setQuery] = React.useState('');
   const [entities, setEntities] = React.useState<Entity[]>([]);
-  const [active, setActive] = React.useState(0);
+  const [searching, setSearching] = React.useState(false);
   const debounced = useDebounced(query.trim(), 250);
 
   const pages = React.useMemo(
     () =>
       ITEMS.filter((i) => !i.adminOnly || user?.role === 'admin').filter((i) =>
-        i.label.toLowerCase().includes(query.toLowerCase()),
+        i.label.toLowerCase().includes(query.trim().toLowerCase()),
       ),
     [query, user?.role],
   );
@@ -47,22 +56,18 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     if (!open) {
       setQuery('');
       setEntities([]);
-      setActive(0);
-      return;
+      setSearching(false);
     }
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onOpenChange(false);
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [open, onOpenChange]);
+  }, [open]);
 
   React.useEffect(() => {
     if (debounced.length < 2) {
       setEntities([]);
+      setSearching(false);
       return;
     }
     let cancelled = false;
+    setSearching(true);
     (async () => {
       try {
         const [c, p] = await Promise.all([
@@ -80,6 +85,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         ]);
       } catch {
         if (!cancelled) setEntities([]);
+      } finally {
+        if (!cancelled) setSearching(false);
       }
     })();
     return () => {
@@ -87,103 +94,67 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     };
   }, [debounced]);
 
-  const total = pages.length + entities.length;
-  const go = (index: number) => {
-    if (index < pages.length) {
-      navigate(pages[index]!.to);
-    } else {
-      const e = entities[index - pages.length]!;
-      navigate(e.kind === 'KH' ? '/customers' : '/products');
-    }
+  const go = (to: string) => {
+    navigate(to);
     onOpenChange(false);
   };
 
+  const hasResults = pages.length > 0 || entities.length > 0;
+
   return (
-    <AnimatePresence>
-      {open && (
-        <div className="fixed inset-0 z-[70] flex items-start justify-center p-4 pt-[14vh]">
-          <motion.div
-            className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            onClick={() => onOpenChange(false)}
-          />
-          <motion.div
-            role="dialog" aria-modal="true" aria-label="Bảng lệnh"
-            className="relative z-10 w-full max-w-xl overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-md"
-            initial={{ opacity: 0, y: -8, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -6, scale: 0.99 }}
-            transition={{ duration: 0.16 }}
-          >
-            <div className="flex h-11 items-center gap-2 border-b px-3">
-              <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <input
-                autoFocus
-                value={query}
-                onChange={(e) => { setQuery(e.target.value); setActive(0); }}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, total - 1)); }
-                  if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
-                  if (e.key === 'Enter' && total > 0) { e.preventDefault(); go(active); }
-                }}
-                placeholder="Chuyển trang hoặc tìm khách/hàng…"
-                aria-label="Tìm lệnh hoặc dữ liệu"
-                className="h-full w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-              />
-              <kbd className="rounded border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">ESC</kbd>
-            </div>
-            <ul className="max-h-[52vh] overflow-auto p-1">
-              {pages.map((p, i) => {
-                const Icon = p.icon;
-                return (
-                  <li key={p.to}>
-                    <button
-                      type="button"
-                      onMouseEnter={() => setActive(i)}
-                      onClick={() => go(i)}
-                      className={cn(
-                        'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm',
-                        i === active && 'bg-accent text-accent-foreground',
-                      )}
-                    >
-                      <Icon className="h-4 w-4 text-muted-foreground" />
-                      <span>Đi tới: {p.label}</span>
-                    </button>
-                  </li>
-                );
-              })}
-              {entities.length > 0 && (
-                <li className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-                  Kết quả tìm kiếm
-                </li>
-              )}
-              {entities.map((e, i) => {
-                const index = pages.length + i;
-                return (
-                  <li key={`${e.kind}-${e.id}`}>
-                    <button
-                      type="button"
-                      onMouseEnter={() => setActive(index)}
-                      onClick={() => go(index)}
-                      className={cn(
-                        'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm',
-                        index === active && 'bg-accent text-accent-foreground',
-                      )}
-                    >
-                      <Badge variant="secondary" className="text-[10px]">{e.kind}</Badge>
-                      <span className="min-w-0 flex-1 truncate text-left">{e.label}</span>
-                      <span className="truncate text-xs text-muted-foreground">{e.hint}</span>
-                    </button>
-                  </li>
-                );
-              })}
-              {total === 0 && (
-                <li className="px-2 py-6 text-center text-sm text-muted-foreground">Không có kết quả</li>
-              )}
-            </ul>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+    <CommandDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      className="max-w-xl gap-0 p-0"
+      // Lọc trang phía client và kết quả khách/hàng phía server: để cmdk tự lọc
+      // sẽ ẩn mất các dòng server trả về mà không chứa đúng chuỗi đang gõ.
+      shouldFilter={false}
+    >
+      <CommandInput
+        value={query}
+        onValueChange={setQuery}
+        placeholder="Chuyển trang hoặc tìm khách/hàng…"
+        aria-label="Tìm lệnh hoặc dữ liệu"
+      >
+        <CommandShortcut className="pr-2">ESC</CommandShortcut>
+      </CommandInput>
+      <CommandList>
+        {searching && <CommandLoading>Đang tìm…</CommandLoading>}
+        {!hasResults && !searching && <CommandEmpty>Không có kết quả</CommandEmpty>}
+
+        {pages.length > 0 && (
+          <CommandGroup heading="Đi tới">
+            {pages.map((p) => {
+              const Icon = p.icon;
+              return (
+                <CommandItem key={p.to} value={`page-${p.to}`} onSelect={() => go(p.to)}>
+                  <Icon className="text-muted-foreground" />
+                  <span>{p.label}</span>
+                </CommandItem>
+              );
+            })}
+          </CommandGroup>
+        )}
+
+        {entities.length > 0 && (
+          <>
+            {pages.length > 0 && <CommandSeparator />}
+            <CommandGroup heading="Kết quả tìm kiếm">
+              {entities.map((e) => (
+                <CommandItem
+                  key={`${e.kind}-${e.id}`}
+                  value={`${e.kind}-${e.id}`}
+                  onSelect={() => go(e.kind === 'KH' ? '/customers' : '/products')}
+                >
+                  <Badge variant="secondary" className="text-[10px]">{e.kind}</Badge>
+                  <span className="min-w-0 flex-1 truncate text-left">{e.label}</span>
+                  <span className="truncate text-xs text-muted-foreground">{e.hint}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </>
+        )}
+      </CommandList>
+    </CommandDialog>
   );
 }

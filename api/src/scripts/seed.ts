@@ -3,7 +3,7 @@
  * Chạy: npm run seed   (từ thư mục api/, sau khi đã đặt biến môi trường)
  * An toàn: bỏ qua nếu DB đã có dữ liệu.
  */
-import 'dotenv/config';
+import '../load-env.js';
 import { getDb } from '../db/index.js';
 import { customers, products, users, salesHistory } from '../db/schema.js';
 import { hashPassword } from '../lib/password.js';

@@ -49,19 +49,12 @@ class PdfTableParser(QuoteParser):
                 tr.apply_totals(totals, pq)
 
         # Trang không có bảng (vd bảng tiếp sang trang 2) -> đọc dòng hàng từ text
-        text_lines, text_totals = tr.lines_from_text(full_text)
+        text_lines, text_totals = tr.lines_from_text(full_text, pq.lines)
         if text_lines:
-            seen = {(l.name.strip().lower(), l.qty, l.unit_price) for l in pq.lines}
+            # Trùng lặp do đọc cả bảng lẫn text được lọc một lần ở finalize()
             for l in text_lines:
-                key = (l.name.strip().lower(), l.qty, l.unit_price)
-                if key in seen:
-                    continue
                 l.line_no = len(pq.lines) + 1
                 pq.lines.append(l)
-                seen.add(key)
-            pq.lines.sort(key=lambda l: l.line_no)
-            for i, l in enumerate(pq.lines, 1):
-                l.line_no = i
         # Bổ sung các dòng tổng còn thiếu từ văn bản (vd bảng tiếp sang trang sau)
         if text_totals:
             for kind, value in text_totals:

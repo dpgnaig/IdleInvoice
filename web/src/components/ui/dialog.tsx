@@ -15,6 +15,8 @@ export function Dialog({
   className,
   title,
   description,
+  hideClose = false,
+  titleHidden = false,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -22,6 +24,10 @@ export function Dialog({
   className?: string;
   title?: string;
   description?: string;
+  /** Ẩn nút X — dùng khi nội dung đã có cách đóng riêng (vd. phím ESC của bảng lệnh). */
+  hideClose?: boolean;
+  /** Chỉ đọc `title` cho trình đọc màn hình, không hiện tiêu đề trên giao diện. */
+  titleHidden?: boolean;
 }) {
   const reduce = useReducedMotion();
   React.useEffect(() => {
@@ -65,20 +71,22 @@ export function Dialog({
             transition={{ duration: 0.15 }}
           >
             {(title || description) && (
-              <div className="flex flex-col space-y-1.5 pr-6 text-left">
+              <div className={cn('flex flex-col space-y-1.5 pr-6 text-left', titleHidden && 'sr-only')}>
                 {title && <h2 className="text-lg font-semibold leading-none tracking-tight">{title}</h2>}
                 {description && <p className="text-sm text-muted-foreground">{description}</p>}
               </div>
             )}
             <div>{children}</div>
-            <button
-              type="button"
-              onClick={() => onOpenChange(false)}
-              className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              aria-label="Đóng"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            {!hideClose && (
+              <button
+                type="button"
+                onClick={() => onOpenChange(false)}
+                className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                aria-label="Đóng"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </motion.div>
         </div>
       )}

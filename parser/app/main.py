@@ -7,15 +7,21 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from .base import QuoteParser
+from .docx_parser import DocxTableParser, read_docx
 from .excel_parser import ExcelTableParser
-from .models import HealthResponse, ParsedQuote
+from .models import HealthResponse, ParsedQuote, PreviewDoc, PreviewSheet
 from .pdf_parser import PdfTableParser
+from . import table_reader as tr
 
 MAX_FILE_MB = float(os.environ.get("MAX_FILE_MB", "10"))
 INTERNAL_KEY = os.environ.get("INTERNAL_KEY", "")
 LLM_FALLBACK_ENABLED = os.environ.get("LLM_FALLBACK_ENABLED", "false").lower() == "true"
 
-PARSERS: list[QuoteParser] = [ExcelTableParser(), PdfTableParser()]
+PARSERS: list[QuoteParser] = [ExcelTableParser(), DocxTableParser(), PdfTableParser()]
+
+# Xem trước chỉ để đọc bằng mắt — chặn kích thước để trình duyệt không treo
+PREVIEW_MAX_ROWS = 1200
+PREVIEW_MAX_COLS = 40
 
 app = FastAPI(title="IdleInvoice Parser", version="0.1.0")
 
@@ -46,12 +52,15 @@ async def parse(
 
     parser = next((p for p in PARSERS if p.can_parse(name)), None)
     if parser is None:
+        hint = " Chỉ hỗ trợ .pdf, .xlsx, .xls, .docx — file .doc cũ cần lưu lại thành .docx."
+        if name.lower().endswith(".doc"):
+            hint = " File .doc (Word 97-2003) chưa hỗ trợ — mở bằng Word rồi lưu thành .docx."
         return JSONResponse(
             status_code=422,
             content={
                 "error": "Định dạng file không hỗ trợ",
                 "error_code": "UNSUPPORTED_FORMAT",
-                "message": f"Chỉ hỗ trợ .pdf, .xlsx, .xls (nhận: {name})",
+                "message": f"{hint} (nhận: {name})",
             },
         )
     try:
@@ -82,6 +91,56 @@ async def parse(
             },
         )
     return JSONResponse(status_code=200, content=result.model_dump())
+
+
+def _preview_rows(rows: list[list[str]]) -> list[list[str]]:
+    out: list[list[str]] = []
+    for row in rows[:PREVIEW_MAX_ROWS]:
+        trimmed = list(row[:PREVIEW_MAX_COLS])
+        while trimmed and not trimmed[-1]:
+            trimmed.pop()
+        out.append(trimmed)
+    while out and not any(out[-1]):
+        out.pop()
+    return out
+
+
+@app.post("/preview", response_model=PreviewDoc)
+async def preview(
+    file: UploadFile = File(...),
+    _auth: None = Depends(check_internal_key),
+) -> PreviewDoc:
+    """Trả dữ liệu thô (sheet/đoạn văn) để UI xem trước Excel và Word."""
+    name = file.filename or "upload.bin"
+    data = await file.read()
+    if len(data) > MAX_FILE_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File quá lớn (tối đa {MAX_FILE_MB:g} MB)")
+    if len(data) == 0:
+        raise HTTPException(status_code=400, detail="File rỗng")
+
+    lower = name.lower()
+    try:
+        if lower.endswith((".xlsx", ".xls")):
+            sheets = [
+                PreviewSheet(name=sheet_name, rows=_preview_rows(grid))
+                for sheet_name, grid in tr.read_sheets_excel(data, name)
+            ]
+            return PreviewDoc(kind="excel", sheets=sheets)
+        if lower.endswith(".docx"):
+            paragraphs, grids = read_docx(data)
+            return PreviewDoc(
+                kind="word",
+                sheets=[
+                    PreviewSheet(name=f"Bảng {i + 1}", rows=_preview_rows(g))
+                    for i, g in enumerate(grids)
+                ],
+                paragraphs=paragraphs[:PREVIEW_MAX_ROWS],
+            )
+        if lower.endswith(".pdf"):
+            return PreviewDoc(kind="pdf")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Không đọc được file để xem trước: {str(exc)[:200]}")
+    raise HTTPException(status_code=422, detail="Định dạng file không hỗ trợ xem trước")
 
 
 @app.post("/parse-file-path")

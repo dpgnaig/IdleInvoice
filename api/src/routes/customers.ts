@@ -1,11 +1,11 @@
 import { Router } from 'express';
-import { and, asc, count, desc, eq, like, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, like, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '../db/index.js';
 import { customerAliases, customers, invoices, quotes } from '../db/schema.js';
 import { writeAudit } from '../lib/audit.js';
 import { conflict, notFound } from '../lib/errors.js';
-import { normalizeTaxCode } from '../lib/normalize.js';
+import { normalizeTaxCode, normalizeText } from '../lib/normalize.js';
 import { asyncHandler } from '../middleware/error.js';
 import { requireRole } from '../middleware/auth.js';
 
@@ -36,8 +36,9 @@ customersRouter.get(
     const q = listQuery.parse(req.query);
     const db = getDb();
     const term = `%${q.search}%`;
+    const normTerm = `%${normalizeText(q.search)}%`;
     const where = q.search
-      ? or(like(customers.taxCode, term), like(customers.name, `%${q.search}%`))
+      ? or(like(customers.taxCode, term), sql`norm_text(${customers.name}) LIKE ${normTerm}`)
       : undefined;
     const sortField = q.sort.startsWith('-') ? q.sort.slice(1) : q.sort;
     const sortColumn =

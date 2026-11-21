@@ -125,22 +125,35 @@ def extract_model_brand_origin(text: str) -> tuple[str, str, str]:
 
 DATE_VN_RE = re.compile(r"ng[aà]y\s*(\d{1,2})\s*th[aá]ng\s*(\d{1,2})\s*n[aă]m\s*(\d{4})", re.I)
 DATE_SLASH_RE = re.compile(r"(?<!\d)(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})(?!\d)")
+# "Hôm nay, ngày ...," luôn là ngày lập chứng từ. Các câu "Căn cứ ... ngày 24
+# tháng 11 năm 2015" trích luật cũng có dạng ngày nên phải ưu tiên dòng này.
+DATE_TODAY_RE = re.compile(
+    r"(?:h[oô]m\s*nay|ng[aà]y\s*l[aậ]p|k[yý]\s*ng[aà]y)[^\n]{0,40}?"
+    r"ng[aà]y\s*(\d{1,2})\s*th[aá]ng\s*(\d{1,2})\s*n[aă]m\s*(\d{4})",
+    re.I,
+)
+# "Số báo giá"/"Báo giá số" tách rời trên dòng Excel/Word ("Số trang: 01 | Số báo giá: X")
+QUOTE_NO_LABEL_RE = re.compile(
+    r"(?:s[oôố]\s*b[aá]o\s*gi[aá]|b[aá]o\s*gi[aá]\s*s[oôố]|bg\s*s[oôố])\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/\._]{2,40})",
+    re.I,
+)
 
 
-def extract_date(text: str) -> str:
-    m = DATE_VN_RE.search(text or "")
-    if not m:
-        m = DATE_SLASH_RE.search(text or "")
-    if not m:
-        return ""
+def _ymd(m: re.Match[str]) -> str:
     d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
     if not (1 <= mo <= 12 and 1 <= d <= 31):
         return ""
     return f"{y:04d}-{mo:02d}-{d:02d}"
 
 
+def extract_date(text: str) -> str:
+    text = text or ""
+    m = DATE_TODAY_RE.search(text) or DATE_VN_RE.search(text) or DATE_SLASH_RE.search(text)
+    return _ymd(m) if m else ""
+
+
 QUOTE_NO_RES = [
-    re.compile(r"s[oôố]\s*b[aá]o\s*gi[aá]\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/\._]{2,40})", re.I),
+    QUOTE_NO_LABEL_RE,
     re.compile(r"s[oôố]\s*bg\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/\._]{2,40})", re.I),
 ]
 
@@ -159,13 +172,33 @@ RECEIVER_RE = re.compile(r"ngu[oờ]i\s*nh[aậ]n\s*[:\-]?\s*([^\n|]{2,40})", re
 
 
 def classify_total(label: str) -> str | None:
-    """Phân loại dòng tổng: subtotal (trước VAT) / vat / total."""
+    """Phân loại dòng tổng: subtotal (trước VAT) / vat / total.
+
+    "vat" ở đây nghĩa là dòng TIỀN thuế. Dòng chỉ có chữ ("Vật liệu:",
+    "Đơn giá trên đã bao gồm VAT 8%") không được coi là dòng tổng — không có
+    số tiền thì không có gì để ghi, chỉ gây nhiễu.
+    """
     n = norm(label)
     if not n:
         return None
-    if "chua bao gom vat" in n or "truoc vat" in n or "khong bao gom vat" in n:
+    # "Mã số thuế: 0101234567" không phải dòng VAT — nếu không loại sẽ lấy MST làm tiền thuế
+    if "ma so thue" in n or "mst" in n:
+        return None
+    # "Vật liệu"/"Vật tư" trong bảng thông số kỹ thuật cũng chứa "vat" (bỏ dấu
+    # thành "vat lieu") -> không phải dòng thuế.
+    if "vat lieu" in n or "vat tu" in n:
+        return None
+    if "vat" in n and "thue" not in n and not re.search(r"\bvat\b(?!\s+(lieu|tu))", n):
+        return None
+    # "Đường kính tổng cộng: 268 mm" -> classify sẽ bắt chữ "tong" và lấy 268 làm tiền
+    if re.search(r"\btong\b.*\b(mm|cm|met|m)\b", n):
+        return None
+    if "chua bao gom vat" in n or "truoc vat" in n or "khong bao gom vat" in n or "truoc thue" in n:
         return "subtotal"
     if "thanh tien" in n or "tong cong" in n or "tong thanh toan" in n or "tong tien thanh toan" in n:
+        return "total"
+    # "Tổng giá trị đã bao gồm VAT" là tổng thanh toán, không phải dòng thuế
+    if "bao gom vat" in n:
         return "total"
     if "vat" in n or "thue" in n:
         return "vat"

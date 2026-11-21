@@ -41,6 +41,8 @@ export function codeKey(s: string): string {
 
 const LEGAL_WORDS = [
   'cong ty',
+  'cty',
+  'ctcp',
   'tnhh',
   'mtv',
   'mot thanh vien',

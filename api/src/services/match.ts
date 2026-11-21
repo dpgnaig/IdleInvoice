@@ -30,13 +30,32 @@ export interface CustomerMatch {
   candidates?: Array<{ id: number; taxCode: string; name: string; score: number }>;
 }
 
-function tokenScore(a: string, b: string): number {
+/**
+ * Tên đã đủ chắc để tự chọn khách hàng (điền luôn MST) thay vì bắt người dùng
+ * chọn trong danh sách gợi ý:
+ *  - điểm ≥ 0.85, hoặc
+ *  - điểm ≥ 0.70 và bỏ xa ứng viên kế tiếp (≥ 0.15).
+ * `scored` phải đã sắp giảm dần theo điểm.
+ */
+export function confidentCustomer(scored: Array<{ score: number }>): boolean {
+  const top = scored[0];
+  if (!top) return false;
+  const second = scored[1];
+  return top.score >= 0.85 || (top.score >= 0.7 && (!second || top.score - second.score >= 0.15));
+}
+
+/**
+ * Dice trên tập token: 2·|A∩B| / (|A|+|B|).
+ * Công bằng hơn Jaccard/chia max khi một bên có thêm từ mô tả
+ * (vd tên đầy đủ trong DSKH dài hơn tên trên báo giá).
+ */
+export function tokenScore(a: string, b: string): number {
   const ta = new Set(a.split(' ').filter(Boolean));
   const tb = new Set(b.split(' ').filter(Boolean));
   if (!ta.size || !tb.size) return 0;
   let inter = 0;
   for (const t of ta) if (tb.has(t)) inter++;
-  return inter / Math.max(ta.size, tb.size);
+  return (2 * inter) / (ta.size + tb.size);
 }
 
 export function matchCustomer(buyerName: string, buyerTaxCode: string): CustomerMatch {
@@ -81,18 +100,17 @@ export function matchCustomer(buyerName: string, buyerTaxCode: string): Customer
     const scored = all
       .map((c) => ({
         c,
-        score: Math.max(
-          tokenScore(simple, simplifyCompanyName(c.name)),
-          tokenScore(norm, normalizeText(c.name)),
-        ),
+        score: tokenScore(simple, simplifyCompanyName(c.name)),
       }))
       .filter((s) => s.score >= 0.6)
       .sort((a, b) => b.score - a.score);
-    if (scored.length === 1 && scored[0]!.score >= 0.85) {
+    // Chỉ có tên trong báo giá -> tự chọn khi đủ chắc để điền luôn MST
+    if (confidentCustomer(scored)) {
+      const hit = scored[0]!.c;
       return {
         status: 'matched',
-        customerId: scored[0]!.c.id,
-        customer: toCustomer(scored[0]!.c),
+        customerId: hit.id,
+        customer: toCustomer(hit),
         method: 'fuzzy_unique',
       };
     }
@@ -302,6 +320,66 @@ export function matchProduct(
 
 function toProduct(p: typeof products.$inferSelect): NonNullable<ProductMatch['product']> {
   return { id: p.id, code: p.code, name: p.name, unit: p.unit };
+}
+
+/**
+ * Ứng viên rộng cho AI (mặc định 20), gộp khớp mã + khớp tên trên TOÀN BỘ danh mục.
+ * `matchProduct` cắt 5 để hiển thị UI; AI cần nhiều hơn thì mới cứu được các
+ * dòng mà bộ ghép tất định không chọn được.
+ */
+export function candidatesForAi(
+  line: ParsedLine,
+  limit = 20,
+): Array<{ id: number; code: string; name: string; unit: string }> {
+  const db = getDb();
+  const all = db.select().from(products).all();
+  const out: Array<typeof products.$inferSelect> = [];
+  const seen = new Set<number>();
+  const push = (p: typeof products.$inferSelect) => {
+    if (seen.has(p.id)) return;
+    seen.add(p.id);
+    out.push(p);
+  };
+  const pushMany = (list: Array<typeof products.$inferSelect>) => {
+    for (const p of list) {
+      if (out.length >= limit) return;
+      push(p);
+    }
+  };
+
+  const modelKey = codeKey(line.model);
+  if (modelKey) {
+    // Thứ tự ưu tiên giống matchProduct: khít -> alias -> bắt đầu bằng -> chứa
+    pushMany(all.filter((p) => codeKey(p.code) === modelKey));
+
+    const target = normalizeCode(line.model);
+    const alias = db.select().from(productAliases).all().find((a) => normalizeCode(a.aliasText) === target);
+    const aliasProduct = alias ? all.find((p) => p.id === alias.productId) : undefined;
+    if (aliasProduct) push(aliasProduct);
+
+    if (modelKey.length >= 3) {
+      pushMany(all.filter((p) => {
+        const k = codeKey(p.code);
+        return k !== modelKey && k.startsWith(modelKey);
+      }));
+      pushMany(all.filter((p) => {
+        const k = codeKey(p.code);
+        if (k === modelKey) return false;
+        return k.includes(modelKey) || (modelKey.includes(k) && k.length >= 3);
+      }));
+    }
+  }
+
+  const nameNorm = normalizeText(line.name);
+  if (nameNorm) {
+    const scored = all
+      .map((p) => ({ p, score: tokenScore(nameNorm, normalizeText(p.name)) }))
+      .filter((s) => s.score >= 0.3)
+      .sort((a, b) => b.score - a.score);
+    pushMany(scored.map((s) => s.p));
+  }
+
+  return out.slice(0, limit).map(toProduct);
 }
 
 export const __matchInternals = { and, parseTaxRate, tokenScore };

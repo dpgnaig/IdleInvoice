@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as schema from './schema.js';
-import { codeKey } from '../lib/normalize.js';
+import { codeKey, normalizeText } from '../lib/normalize.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -19,6 +19,8 @@ export function getDb(): BetterSQLite3Database<typeof schema> {
   sqlite.pragma('journal_mode = WAL');
   // Hàm SQL để so khớp mã hàng bỏ hết dấu: "LT - 040" và "LT-040-0.75kw" cùng khoá LT040→LT040075KW
   sqlite.function('code_key', { deterministic: true }, (v: unknown) => codeKey(String(v ?? '')));
+  // Hàm SQL tìm theo tên: bỏ dấu, chữ thường -> "may thoi khi" khớp "MÁY THỔI KHÍ"
+  sqlite.function('norm_text', { deterministic: true }, (v: unknown) => normalizeText(String(v ?? '')));
   db = drizzle(sqlite, { schema });
   runMigrations(sqlite);
   return db;

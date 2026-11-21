@@ -24,10 +24,32 @@ HEADER_KEYWORDS: dict[str, list[str]] = {
         "dien giai",
         "mo ta",
     ],
+    # Cột riêng cho model/hãng/xuất xứ — báo giá Word/Excel thường tách cột
+    # thay vì ghi "Model: ..." trong ô tên hàng.
+    "model": ["model", "ma model", "ma hang", "ma hieu", "ky hieu"],
+    "brand": [
+        "hang",
+        "hang sx",
+        "hang san xuat",
+        "hang san xuat",
+        "thuong hieu",
+        "nhan hieu",
+        "hangsx",
+    ],
+    "origin": ["xuat xu", "nuoc san xuat", "nuoc", "made in"],
+    "desc": ["mo ta chi tiet", "mo ta", "quy cach", "thong so ky thuat"],
     "unit": ["dvt", "don vi tinh", "dv", "don vi"],
     "qty": ["so luong", "sl", "khoi luong"],
     "unit_price": ["don gia"],
     "amount": ["thanh tien", "so tien", "tong tien"],
+}
+
+# Từ khoá ngắn dễ khớp nhầm cột khác ("Hàng" trong "Hàng hóa", "Nước" trong
+# "Nước uống"): chỉ chấp nhận khi cả ô đúng bằng từ khoá.
+EXACT_ONLY: dict[str, set[str]] = {
+    "brand": {"hang", "hangsx"},
+    "origin": {"nuoc"},
+    "model": {"model", "ma hang", "ma hieu", "ky hieu"},
 }
 
 
@@ -38,23 +60,31 @@ def _cell(cells: list[str], i: int | None) -> str:
 
 
 def score_header(cells: list[str]) -> dict[str, int] | None:
-    """Trả map field -> chỉ số cột nếu dòng này là tiêu đề bảng hàng hóa."""
+    """Trả map field -> chỉ số cột nếu dòng này là tiêu đề bảng hàng hóa.
+
+    Mỗi cột chỉ được gán cho một field (cột "Mô tả" không bị vừa là tên hàng
+    vừa là mô tả). Từ khoá ngắn trong ``EXACT_ONLY`` chỉ khớp nguyên ô.
+    """
     keys = [tu.norm(c) for c in cells]
     mapping: dict[str, int] = {}
+    used: set[int] = set()
     for field, words in HEADER_KEYWORDS.items():
+        exact = EXACT_ONLY.get(field, set())
         for i, k in enumerate(keys):
-            if not k:
+            if not k or i in used:
                 continue
             if any(k == w for w in words):
                 mapping[field] = i
+                used.add(i)
                 break
         if field in mapping:
             continue
         for i, k in enumerate(keys):
-            if not k:
+            if not k or i in used:
                 continue
-            if any(len(w) >= 2 and w in k for w in words):
+            if any(len(w) >= 4 and w not in exact and w in k for w in words):
                 mapping[field] = i
+                used.add(i)
                 break
     if "name" not in mapping:
         return None
@@ -81,6 +111,10 @@ def grid_lines(grid: list[list[str]], header_idx: int, mapping: dict[str, int]) 
     qty_i = mapping.get("qty")
     price_i = mapping.get("unit_price")
     amount_i = mapping.get("amount")
+    model_i = mapping.get("model")
+    brand_i = mapping.get("brand")
+    origin_i = mapping.get("origin")
+    desc_i = mapping.get("desc")
 
     lines: list[QuoteLine] = []
     totals: list[tuple[str, int]] = []
@@ -110,6 +144,12 @@ def grid_lines(grid: list[list[str]], header_idx: int, mapping: dict[str, int]) 
         # Dòng hàng chính: có tên + (số lượng hoặc đơn giá/thành tiền)
         if name_cell and (qty is not None or (price is not None and price > 0) or (amount is not None and amount > 0)):
             model, brand, origin = tu.extract_model_brand_origin(name_cell)
+            model = _cell(row, model_i) or model
+            brand = _cell(row, brand_i) or brand
+            origin = _cell(row, origin_i) or origin
+            desc = _cell(row, desc_i)
+            # Cột mô tả trùng nội dung ô tên thì không lặp lại
+            spec_text = desc if desc and tu.norm(desc) != tu.norm(name_cell) else ""
             current = QuoteLine(
                 line_no=len(lines) + 1,
                 name=name_cell,
@@ -120,6 +160,7 @@ def grid_lines(grid: list[list[str]], header_idx: int, mapping: dict[str, int]) 
                 model=model,
                 brand=brand,
                 origin=origin,
+                spec_text=spec_text,
                 confidence="high" if (qty is not None and price is not None) else "medium",
             )
             lines.append(current)
@@ -167,6 +208,11 @@ def apply_totals(totals: list[tuple[str, int]], pq: ParsedQuote) -> None:
 
 
 def read_grids_excel(data: bytes, filename: str) -> list[list[list[str]]]:
+    return [grid for _name, grid in read_sheets_excel(data, filename)]
+
+
+def read_sheets_excel(data: bytes, filename: str) -> list[tuple[str, list[list[str]]]]:
+    """Trả [(tên sheet, grid)] — dùng cho xem trước và cho parser."""
     if filename.lower().endswith(".xls"):
         return _read_xls(data)
     return _read_xlsx(data)
@@ -180,13 +226,13 @@ def _norm_cell(value: object) -> str:
     return str(value).strip()
 
 
-def _read_xlsx(data: bytes) -> list[list[list[str]]]:
+def _read_xlsx(data: bytes) -> list[tuple[str, list[list[str]]]]:
     import io
 
     from openpyxl import load_workbook
 
     wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
-    out: list[list[list[str]]] = []
+    out: list[tuple[str, list[list[str]]]] = []
     for ws in wb.worksheets:
         grid: list[list[str]] = []
         for row in ws.iter_rows(values_only=True):
@@ -194,15 +240,15 @@ def _read_xlsx(data: bytes) -> list[list[list[str]]]:
             if any(vals):
                 grid.append(vals)
         if grid:
-            out.append(grid)
+            out.append((ws.title or "Sheet", grid))
     return out
 
 
-def _read_xls(data: bytes) -> list[list[list[str]]]:
+def _read_xls(data: bytes) -> list[tuple[str, list[list[str]]]]:
     import xlrd
 
     wb = xlrd.open_workbook(file_contents=data)
-    out: list[list[list[str]]] = []
+    out: list[tuple[str, list[list[str]]]] = []
     for ws in wb.sheets():
         grid: list[list[str]] = []
         for r in range(ws.nrows):
@@ -210,7 +256,7 @@ def _read_xls(data: bytes) -> list[list[list[str]]]:
             if any(row):
                 grid.append(row)
         if grid:
-            out.append(grid)
+            out.append((ws.name or "Sheet", grid))
     return out
 
 
@@ -348,8 +394,20 @@ TEXT_LINE_RE = re.compile(
 )
 
 
-def lines_from_text(text: str) -> tuple[list[QuoteLine], list[tuple[str, int]]]:
-    """Dự phòng cho trang PDF không có đường kẻ bảng."""
+def lines_from_text(
+    text: str, existing: list[QuoteLine] | None = None
+) -> tuple[list[QuoteLine], list[tuple[str, int]]]:
+    """Dự phòng cho trang PDF không có đường kẻ bảng.
+
+    `existing` là các dòng đã đọc từ bảng. Dòng text có cùng (SL, đơn giá,
+    thành tiền) với một dòng trong bảng bị coi là bản đọc lại của cùng dòng đó;
+    chỉ giữ số dòng vượt quá số lần xuất hiện trong bảng.
+    """
+    budget: dict[tuple, int] = {}
+    for l in existing or []:
+        key = (l.qty, l.unit_price, l.amount)
+        budget[key] = budget.get(key, 0) + 1
+
     lines: list[QuoteLine] = []
     totals: list[tuple[str, int]] = []
     current: QuoteLine | None = None
@@ -370,7 +428,7 @@ def lines_from_text(text: str) -> tuple[list[QuoteLine], list[tuple[str, int]]]:
                 unit = tokens[-1]
                 body = " ".join(tokens[:-1])
             model, brand, origin = tu.extract_model_brand_origin(body)
-            current = QuoteLine(
+            candidate = QuoteLine(
                 line_no=len(lines) + 1,
                 name=body,
                 unit=unit,
@@ -382,6 +440,11 @@ def lines_from_text(text: str) -> tuple[list[QuoteLine], list[tuple[str, int]]]:
                 origin=origin,
                 confidence="medium",
             )
+            key = (candidate.qty, candidate.unit_price, candidate.amount)
+            if budget.get(key, 0) > 0:
+                budget[key] -= 1
+                continue
+            current = candidate
             lines.append(current)
             continue
         if current is not None and raw.strip():
@@ -396,8 +459,41 @@ def lines_from_text(text: str) -> tuple[list[QuoteLine], list[tuple[str, int]]]:
     return lines, totals
 
 
+def _dedupe_lines(lines: list[QuoteLine]) -> list[QuoteLine]:
+    """Bỏ dòng trùng do đọc cả bảng (có đường kẻ) lẫn text của cùng trang PDF.
+
+    Tên trùng nhưng khác model (2 mã của 1 thiết bị) hoặc khác ĐVT/giá thì giữ:
+    chỉ coi là trùng khi cả tên gọn (bỏ phần sau xuống dòng và "MODEL: ...")
+    lẫn số lượng, đơn giá và model đều khớp.
+    """
+    out: list[QuoteLine] = []
+    seen: set[tuple] = set()
+    for l in lines:
+        head = re.split(r"[\n(]", l.name)[0].strip().lower()
+        key = (head, l.qty, l.unit_price, tu.norm(l.model))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(l)
+    for i, l in enumerate(out, 1):
+        l.line_no = i
+    return out
+
+
 def finalize(pq: ParsedQuote) -> ParsedQuote:
     """Tính thuế suất, kiểm tra lệch tổng, sinh cảnh báo."""
+    pq.lines = _dedupe_lines(pq.lines)
+
+    # Đọc nhầm "%" thành số tiền (vd "VAT 10% 5,657,000" -> VAT = 10):
+    # VAT khai báo là bội số của thuế suất trên tổng trước thuế, không phải
+    # vài chục đồng. Bỏ số vô lý để UI tự tính lại.
+    base = pq.declared_subtotal or round(sum((l.qty or 0) * (l.unit_price or 0) for l in pq.lines))
+    if pq.declared_vat is not None and base:
+        if pq.declared_vat < 1000 or pq.declared_vat > base * 0.5:
+            pq.declared_vat = None
+    if pq.declared_total is not None and base and pq.declared_total < base * 0.9:
+        pq.declared_total = None
+
     if pq.tax_rate is None and pq.declared_subtotal and pq.declared_vat:
         pq.tax_rate = round(pq.declared_vat / pq.declared_subtotal, 4)
 

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { mkdirSync, existsSync, writeFileSync, createReadStream } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, createReadStream } from 'node:fs';
 import { join, resolve as pathResolve } from 'node:path';
 import { z } from 'zod';
 import { and, count, desc, eq, like, or } from 'drizzle-orm';
@@ -8,9 +8,14 @@ import { getDb } from '../db/index.js';
 import { invoices, invoiceLines, quoteFiles, quotes, customers, products } from '../db/schema.js';
 import { writeAudit } from '../lib/audit.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
+import { AppError } from '../lib/errors.js';
+import { logger } from '../lib/logger.js';
+import { normalizeTaxCode } from '../lib/normalize.js';
 import { asyncHandler } from '../middleware/error.js';
-import { parseWithPython } from '../services/parser-client.js';
-import { buildDraft, confirmDraft, sha256 } from '../services/quotes.js';
+import { parseWithPython, previewWithPython } from '../services/parser-client.js';
+import { enrichWithAi } from '../services/ai-enrich.js';
+import { createJob, finishJob, getJob, jobView, updateFile } from '../services/quote-jobs.js';
+import { matchQuote, buildDraft, confirmDraft, lookupDraftCustomer, sha256 } from '../services/quotes.js';
 
 const UPLOAD_ROOT = process.env.UPLOAD_DIR ?? './uploads';
 
@@ -24,8 +29,8 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024, files: 10 },
   fileFilter: (_req, file, cb) => {
-    const ok = /\.(pdf|xlsx|xls)$/i.test(file.originalname);
-    if (!ok) return cb(new Error('Chỉ chấp nhận file .pdf, .xlsx, .xls'));
+    const ok = /\.(pdf|xlsx|xls|docx)$/i.test(file.originalname);
+    if (!ok) return cb(new Error('Chỉ chấp nhận file .pdf, .xlsx, .xls, .docx'));
     cb(null, true);
   },
 });
@@ -39,30 +44,31 @@ function db_file(hash: string) {
 function mimeFor(name: string): string {
   const n = name.toLowerCase();
   if (n.endsWith('.pdf')) return 'application/pdf';
+  if (n.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   if (n.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   return 'application/vnd.ms-excel';
 }
 
 /** Lưu file với tên ngẫu nhiên (không tin tên gốc). */
 function storeFile(buffer: Buffer, originalName: string, fileHash: string): string {
-  const ext = (/\.(pdf|xlsx|xls)$/i.exec(originalName)?.[1] ?? 'bin').toLowerCase();
+  const ext = (/\.(pdf|xlsx|xls|docx)$/i.exec(originalName)?.[1] ?? 'bin').toLowerCase();
   const stored = join(uploadDir(), `${fileHash}.${ext}`);
   if (!existsSync(stored)) writeFileSync(stored, buffer);
   return stored;
 }
 
-quotesRouter.post(
-  '/parse',
-  upload.array('files', 10),
-  asyncHandler(async (req, res) => {
-    const files = (req.files ?? []) as Express.Multer.File[];
-    if (!files.length) throw badRequest('Vui lòng chọn ít nhất một file báo giá');
-    const db = getDb();
-    const drafts: unknown[] = [];
+/** Xử lý nền một phiên tải lên: cập nhật tiến trình từng file để UI poll. */
+async function processQuoteFiles(
+  jobId: string,
+  files: Express.Multer.File[],
+  userId: number,
+): Promise<void> {
+  const db = getDb();
 
-    for (const f of files) {
-      // multer giải mã tên file theo latin1 -> đổi về UTF-8 để giữ tiếng Việt
-      f.originalname = Buffer.from(f.originalname, 'latin1').toString('utf8');
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i]!;
+    try {
+      updateFile(jobId, i, { stage: 'parsing', pct: 15 });
       const fileHash = sha256(f.buffer);
       const parsed = await parseWithPython(f.buffer, f.originalname, mimeFor(f.originalname));
 
@@ -74,7 +80,7 @@ quotesRouter.post(
             originalName: f.originalname,
             storedPath: '',
             fileHash: `${fileHash}-${now}`, // hash riêng để không chặn lần tải lại
-            uploadedBy: req.user!.id,
+            uploadedBy: userId,
             parseStatus: 'failed',
             errorMessage: parsed.message,
             createdAt: now,
@@ -82,13 +88,18 @@ quotesRouter.post(
           })
           .onConflictDoNothing()
           .run();
-        drafts.push({
-          fileHash,
-          originalName: f.originalname,
-          status: 'failed',
-          error: parsed.error,
-          errorCode: parsed.errorCode,
+        updateFile(jobId, i, {
+          stage: 'error',
+          pct: 100,
           message: parsed.message,
+          draft: {
+            fileHash,
+            originalName: f.originalname,
+            status: 'failed',
+            error: parsed.error,
+            errorCode: parsed.errorCode,
+            message: parsed.message,
+          },
         });
         continue;
       }
@@ -112,7 +123,7 @@ quotesRouter.post(
             originalName: f.originalname,
             storedPath,
             fileHash,
-            uploadedBy: req.user!.id,
+            uploadedBy: userId,
             parseStatus: 'parsed',
             parsedJson: JSON.stringify(parsed.data),
             createdAt: now,
@@ -121,7 +132,26 @@ quotesRouter.post(
           .run();
       }
 
-      const draft = buildDraft(parsed.data, f.originalname, fileHash);
+      // Ghép tất định để lấy ứng viên mã hàng, rồi mới hỏi AI (AI chọn trong ứng viên đó)
+      updateFile(jobId, i, { stage: 'matching', pct: 35 });
+      const base = matchQuote(parsed.data);
+      updateFile(jobId, i, { stage: 'ai', pct: 55 });
+      const ai = await enrichWithAi(parsed.data, base.lines.map((l) => l.productMatch));
+      const draft = buildDraft(parsed.data, f.originalname, fileHash, ai, base);
+
+      // MST có trong file nhưng chưa có trong DSKH -> tra VietQR (không phụ thuộc AI)
+      updateFile(jobId, i, { stage: 'tax_lookup', pct: 80 });
+      const needsTaxLookup =
+        draft.customerMatch.status !== 'matched' && normalizeTaxCode(parsed.data.buyer_tax_code).length >= 10;
+      const looked = needsTaxLookup ? await lookupDraftCustomer(parsed.data) : null;
+      if (looked?.info) {
+        draft.warnings.push(
+          `Tra cứu VietQR MST ${looked.info.taxCode}: ${looked.info.name}${looked.info.address ? ` — ${looked.info.address}` : ''}`,
+        );
+      } else if (looked?.warning) {
+        draft.warnings.push(looked.warning);
+      }
+
       if (existingFile) {
         draft.warnings.unshift(
           `File "${f.originalname}" đã được tải lên trước đó (trùng nội dung) — kiểm tra trước khi xác nhận`,
@@ -137,32 +167,127 @@ quotesRouter.post(
           .run();
       }
 
-      drafts.push({
-        fileHash,
-        originalName: f.originalname,
-        status: needsReview ? 'needs_review' : 'parsed',
-        duplicateFile: Boolean(existingFile),
-        customerMatch: draft.customerMatch,
-        lines: draft.lines,
-        warnings: draft.warnings,
-        parsed: {
-          buyerName: draft.parsed.buyer_name,
-          buyerTaxCode: draft.parsed.buyer_tax_code,
-          quoteNo: draft.parsed.quote_no,
-          quoteDate: draft.parsed.quote_date,
-          senderName: draft.parsed.sender_name,
-          receiverName: draft.parsed.receiver_name,
-          declaredSubtotal: draft.parsed.declared_subtotal,
-          declaredVat: draft.parsed.declared_vat,
-          declaredTotal: draft.parsed.declared_total,
-          taxRate: draft.parsed.tax_rate,
-          paymentTerms: draft.parsed.payment_terms,
-          validityDays: draft.parsed.validity_days,
+      // Khách AI tìm ra (ngoài danh mục) -> tự thêm vào DSKH và gắn vào báo giá
+      let customerSuggestion: Record<string, unknown> | null = null;
+      const suggestionInfo =
+        ai?.customer?.customerMatch.status === 'new_customer' && ai.customer.info
+          ? ai.customer.info
+          : looked?.info ?? null;
+      if (suggestionInfo) {
+        const info = suggestionInfo;
+        if (process.env.AUTO_ADD_CUSTOMER === 'false') {
+          customerSuggestion = info;
+        } else {
+          const nowIso = new Date().toISOString();
+          const created = db
+            .insert(customers)
+            .values({
+              taxCode: normalizeTaxCode(info.taxCode),
+              name: info.name,
+              address: info.address ?? '',
+              source: 'TAX_LOOKUP',
+              createdAt: nowIso,
+              updatedAt: nowIso,
+            })
+            .onConflictDoNothing()
+            .returning()
+            .get();
+          const row = created ?? db.select().from(customers).where(eq(customers.taxCode, normalizeTaxCode(info.taxCode))).get();
+          if (row) {
+            draft.customerMatch = {
+              status: 'matched',
+              customerId: row.id,
+              customer: {
+                id: row.id,
+                taxCode: row.taxCode,
+                name: row.name,
+                address: row.address,
+                email: row.email,
+                buyerName: row.buyerName,
+                bankAccount: row.bankAccount,
+                budgetUnitCode: row.budgetUnitCode,
+              },
+              method: 'ai_tax_lookup',
+            };
+            draft.warnings.push(
+              created
+                ? `Đã thêm khách hàng mới "${row.name}" (MST ${row.taxCode}) vào danh mục`
+                : `Khách hàng MST ${row.taxCode} đã có trong danh mục`,
+            );
+          }
+        }
+      }
+
+      updateFile(jobId, i, {
+        stage: 'done',
+        pct: 100,
+        draft: {
+          fileHash,
+          originalName: f.originalname,
+          status: needsReview ? 'needs_review' : 'parsed',
+          duplicateFile: Boolean(existingFile),
+          customerMatch: draft.customerMatch,
+          lines: draft.lines,
+          warnings: draft.warnings,
+          parsed: {
+            buyerName: draft.parsed.buyer_name,
+            buyerTaxCode: draft.parsed.buyer_tax_code,
+            quoteNo: draft.parsed.quote_no,
+            quoteDate: draft.parsed.quote_date,
+            senderName: draft.parsed.sender_name,
+            receiverName: draft.parsed.receiver_name,
+            declaredSubtotal: draft.parsed.declared_subtotal,
+            declaredVat: draft.parsed.declared_vat,
+            declaredTotal: draft.parsed.declared_total,
+            taxRate: draft.parsed.tax_rate,
+            paymentTerms: draft.parsed.payment_terms,
+            validityDays: draft.parsed.validity_days,
+          },
+          ai: ai ? { ran: ai.status.ran, lines: ai.status.lines ?? 0, notes: ai.status.notes } : null,
+          customerSuggestion,
         },
       });
+    } catch (err) {
+      logger.error({ err, file: f.originalname }, 'Lỗi xử lý báo giá');
+      updateFile(jobId, i, {
+        stage: 'error',
+        pct: 100,
+        message: err instanceof Error ? err.message : 'Lỗi xử lý file',
+      });
+    }
+  }
+
+  finishJob(jobId);
+}
+
+quotesRouter.post(
+  '/parse',
+  upload.array('files', 10),
+  asyncHandler(async (req, res) => {
+    const files = (req.files ?? []) as Express.Multer.File[];
+    if (!files.length) throw badRequest('Vui lòng chọn ít nhất một file báo giá');
+    // multer giải mã tên file theo latin1 -> đổi về UTF-8 để giữ tiếng Việt
+    for (const f of files) {
+      f.originalname = Buffer.from(f.originalname, 'latin1').toString('utf8');
     }
 
-    res.json({ drafts });
+    const job = createJob(files.map((f) => f.originalname));
+    res.status(202).json({ jobId: job.id });
+    // Trả jobId trước, xử lý tiếp ở nền; lỗi từng file được ghi vào job
+    void processQuoteFiles(job.id, files, req.user!.id).catch((err) => {
+      logger.error({ err, jobId: job.id }, 'Phiên xử lý báo giá thất bại');
+      finishJob(job.id);
+    });
+  }),
+);
+
+/** Trạng thái xử lý của một phiên tải lên (UI poll tới khi status = done). */
+quotesRouter.get(
+  '/jobs/:id',
+  asyncHandler(async (req, res) => {
+    const job = getJob(String(req.params.id));
+    if (!job) throw notFound('Không tìm thấy phiên xử lý');
+    res.json(jobView(job));
   }),
 );
 
@@ -282,6 +407,29 @@ quotesRouter.get(
     res.setHeader('Content-Type', mime);
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
     createReadStream(abs).pipe(res);
+  }),
+);
+
+/** Xem trước nội dung file Excel/Word (PDF dùng iframe trực tiếp). Đăng ký TRƯỚC /:id. */
+quotesRouter.get(
+  '/preview/:hash',
+  asyncHandler(async (req, res) => {
+    const hash = String(req.params.hash);
+    if (!/^[0-9a-f]{64}$/.test(hash)) throw badRequest('Mã file không hợp lệ');
+    const file = db_file(hash);
+    if (!file) throw notFound('Không tìm thấy file báo giá');
+    const abs = pathResolve(file.storedPath);
+    if (!existsSync(abs)) throw notFound('File gốc không còn trên đĩa');
+    if (!/\.(xlsx|xls|docx)$/i.test(file.originalName)) {
+      throw badRequest('Chỉ xem trước được file Excel và Word');
+    }
+    const preview = await previewWithPython(
+      readFileSync(abs),
+      file.originalName,
+      mimeFor(file.originalName),
+    );
+    if (!preview) throw new AppError(502, 'Không đọc được file để xem trước');
+    res.json(preview);
   }),
 );
 

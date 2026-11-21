@@ -172,6 +172,15 @@ describe('customers CRUD', () => {
     expect(res.body.pagination.total).toBe(1);
   });
 
+  it('tìm theo tên không dấu, khác hoa thường', async () => {
+    const res = await request(app)
+      .get('/api/customers')
+      .query({ search: 'cong nghe xu ly nuoc', pageSize: 10 })
+      .set('Authorization', `Bearer ${accessToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((c: { id: number }) => c.id)).toContain(id);
+  });
+
   it('cập nhật khách hàng', async () => {
     const res = await request(app)
       .put(`/api/customers/${id}`)
@@ -546,6 +555,13 @@ describe('tìm + ghép mã hàng theo model', () => {
     expect(codes).toContain('HD270KHAU');
   });
 
+  it('tìm theo tên hàng không dấu, khác hoa thường', async () => {
+    for (const q of ['may thoi khi', 'MÁY THỔI KHÍ']) {
+      const codes = await search(q);
+      expect(codes, q).toContain('LT-040-0.75KW');
+    }
+  });
+
   it('model trùng khít mã hàng -> matched đúng mã, ưu tiên hơn tên hàng', () => {
     const line = {
       line_no: 1, name: 'THÂN MÁY THỔI KHÍ LONGTECH', unit: 'Bộ',
@@ -583,5 +599,234 @@ describe('tìm + ghép mã hàng theo model', () => {
     const r = matchProduct(line, null, null);
     expect(r.status).toBe('unmatched');
     expect(r.productId).toBeNull();
+  });
+});
+
+describe('ghép tên công ty + ứng viên cho AI', () => {
+  beforeAll(async () => {
+    await request(app)
+      .post('/api/customers')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ taxCode: '0399999999', name: 'CÔNG TY TNHH THƯƠNG MẠI QUANG MINH' });
+    for (let i = 1; i <= 8; i++) {
+      await request(app)
+        .post('/api/products')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ code: `ABC-00${i}`, name: `Thiết bị ABC số ${i}`, unit: 'Cái' });
+    }
+  });
+
+  it('ghép tên công ty có tiền tố "CTY", không dấu', async () => {
+    const { matchCustomer } = await import('../services/match.js');
+    const r = matchCustomer('CTY QUANG MINH', '');
+    expect(r.status).toBe('matched');
+    expect(r.customer?.name).toContain('QUANG MINH');
+  });
+
+  it('chỉ có tên công ty (viết tắt) -> matched và điền được MST', async () => {
+    const { matchCustomer } = await import('../services/match.js');
+    const r = matchCustomer('CTY TM QUANG MINH', '');
+    expect(r.status).toBe('matched');
+    expect(r.customer?.taxCode).toBe('0399999999');
+  });
+
+  it('AI trả candidate không ghi đè khách đã ghép chắc chắn', async () => {
+    const { buildDraft } = await import('../services/quotes.js');
+    const parsed = {
+      buyer_name: 'CTY TM QUANG MINH', buyer_tax_code: '', quote_no: 'Q-AI-1', quote_date: '',
+      lines: [], declared_subtotal: null, declared_vat: null, declared_total: null,
+      tax_rate: null, payment_terms: '', validity_days: null, warnings: [],
+    };
+    const ai = {
+      customer: {
+        customerMatch: {
+          status: 'candidate',
+          customerId: null,
+          candidates: [{ id: 1, taxCode: '0000000000', name: 'Công ty khác', score: 0.6 }],
+        },
+      },
+      lines: {},
+      status: { ran: true, notes: [] },
+    };
+    const draft = buildDraft(parsed as never, 'x.pdf', 'hash-ai-1', ai as never);
+    expect(draft.customerMatch.status).toBe('matched');
+    expect(draft.customerMatch.customer?.taxCode).toBe('0399999999');
+  });
+
+  it('candidatesForAi trả nhiều hơn 5 ứng viên, gồm mã ngoài top-5 tất định', async () => {
+    const { candidatesForAi } = await import('../services/match.js');
+    const line = {
+      line_no: 1, name: 'Thiết bị ABC', unit: 'Cái', qty: 1, unit_price: 1, amount: 1,
+      model: 'ABC', brand: '', origin: '', spec_text: '', confidence: 'high' as const,
+    };
+    const det = matchProduct(line, null, null);
+    expect((det.candidates ?? []).length).toBeLessThanOrEqual(5);
+    const list = candidatesForAi(line, 20);
+    expect(list.length).toBeGreaterThanOrEqual(8);
+    expect(list.map((p) => p.code)).toContain('ABC-008');
+  });
+});
+
+describe('bổ sung bằng AI (chuỗi dự phòng + trộn kết quả)', () => {
+  const ENV_KEYS = ['GEMINI_API_KEY', 'GOOGLE_AI_API_KEY', 'OPENROUTER_API_KEY', 'OPENROUTER_MODELS', 'AI_ENABLED', 'AI_ATTEMPT_TIMEOUT_MS'];
+
+  const resetAiEnv = () => {
+    for (const k of ENV_KEYS) delete process.env[k];
+  };
+
+  it('không cấu hình key -> aiComplete trả null, không throw', async () => {
+    resetAiEnv();
+    const { aiComplete, aiEnabled, __aiInternals } = await import('../services/ai.js');
+    __aiInternals.breakers.clear();
+    expect(aiEnabled()).toBe(false);
+    await expect(aiComplete('x', Date.now() + 2000)).resolves.toBeNull();
+  });
+
+  it('Gemini lỗi -> chuyển OpenRouter; model lỗi vào cầu dao, lần sau bỏ qua', async () => {
+    resetAiEnv();
+    process.env.GEMINI_API_KEY = 'g';
+    process.env.OPENROUTER_API_KEY = 'o';
+    process.env.OPENROUTER_MODELS = 'a:free,b:free';
+    process.env.AI_ATTEMPT_TIMEOUT_MS = '800';
+    const { aiComplete, __aiInternals } = await import('../services/ai.js');
+    __aiInternals.breakers.clear();
+
+    const called: string[] = [];
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', async (url: unknown, init: RequestInit) => {
+      const u = String(url);
+      if (u.includes('generativelanguage')) {
+        called.push('gemini');
+        return new Response('quota', { status: 429 });
+      }
+      const model = JSON.parse(String(init.body)).model as string;
+      called.push(model);
+      if (model === 'a:free') return new Response('boom', { status: 500 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"ten":"X"}' } }] }), { status: 200 });
+    });
+
+    try {
+      await expect(aiComplete('x', Date.now() + 5000)).resolves.toBe('{"ten":"X"}');
+      expect(called).toEqual(['gemini', 'a:free', 'b:free']);
+
+      called.length = 0;
+      await aiComplete('x', Date.now() + 5000);
+      expect(called).toEqual(['b:free']);
+    } finally {
+      vi.unstubAllGlobals();
+      globalThis.fetch = realFetch;
+      __aiInternals.breakers.clear();
+      resetAiEnv();
+    }
+  });
+
+  it('mọi provider lỗi -> null (báo giá vẫn dùng kết quả ghép tất định)', async () => {
+    resetAiEnv();
+    process.env.GEMINI_API_KEY = 'g';
+    process.env.AI_ATTEMPT_TIMEOUT_MS = '500';
+    const { aiComplete, __aiInternals } = await import('../services/ai.js');
+    __aiInternals.breakers.clear();
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', async () => new Response('down', { status: 503 }));
+    try {
+      await expect(aiComplete('x', Date.now() + 3000)).resolves.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      globalThis.fetch = realFetch;
+      __aiInternals.breakers.clear();
+      resetAiEnv();
+    }
+  });
+
+  it('AI chỉ chọn mã hàng trong danh sách ứng viên, id bịa bị bỏ qua', async () => {
+    resetAiEnv();
+    process.env.GEMINI_API_KEY = 'g';
+    process.env.AI_ATTEMPT_TIMEOUT_MS = '800';
+    const { enrichWithAi } = await import('../services/ai-enrich.js');
+    const { __aiInternals } = await import('../services/ai.js');
+    __aiInternals.breakers.clear();
+
+    // AI trả id=999999 (không có trong ứng viên) + tên đã tách gọn
+    vi.stubGlobal('fetch', async () =>
+      new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: '{"name":"Đĩa phân phối khí","model":"HD-270","productId":999999}' }] } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const pq = {
+      buyer_name: '', buyer_tax_code: '', quote_no: '', quote_date: '',
+      lines: [{
+        line_no: 1, name: 'ĐĨA PHÂN PHỐI KHÍ TINH\nMODEL: HD-270', unit: 'Cái',
+        qty: 1, unit_price: 1000, amount: 1000,
+        model: 'HD-270', brand: '', origin: '', spec_text: '', confidence: 'high' as const,
+      }],
+      declared_subtotal: null, declared_vat: null, declared_total: null,
+      tax_rate: 0.08, payment_terms: '', validity_days: null, warnings: [],
+    };
+    const match = { status: 'matched' as const, productId: 1, product: { id: 1, code: 'HD-270', name: 'Đĩa', unit: 'Cái' }, method: 'model_exact' };
+
+    try {
+      const ai = await enrichWithAi(pq as never, [match as never]);
+      expect(ai).toBeTruthy();
+      expect(ai!.lines[0]?.name).toBe('Đĩa phân phối khí');
+      expect(ai!.lines[0]?.productId).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+      __aiInternals.breakers.clear();
+      resetAiEnv();
+    }
+  });
+
+  it('prompt AI khách hàng chứa ứng viên gần đúng từ toàn bộ danh sách', async () => {
+    resetAiEnv();
+    process.env.GEMINI_API_KEY = 'g';
+    process.env.AI_ATTEMPT_TIMEOUT_MS = '800';
+    const { enrichWithAi } = await import('../services/ai-enrich.js');
+    const { __aiInternals } = await import('../services/ai.js');
+    __aiInternals.breakers.clear();
+
+    let prompt = '';
+    vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
+      prompt = String(JSON.parse(String(init.body)).contents[0].parts[0].text);
+      return new Response(
+        JSON.stringify({
+          candidates: [{
+            content: {
+              parts: [{ text: '{"name":"CÔNG TY TNHH THƯƠNG MẠI QUANG MINH","taxCode":""}' }],
+            },
+          }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+
+    const pq = {
+      buyer_name: 'CTY QUANG MINH', buyer_tax_code: '', quote_no: '', quote_date: '',
+      lines: [], declared_subtotal: null, declared_vat: null, declared_total: null,
+      tax_rate: null, payment_terms: '', validity_days: null, warnings: [],
+    };
+
+    try {
+      const ai = await enrichWithAi(pq as never, []);
+      expect(prompt).toContain('QUANG MINH');
+      expect(ai?.customer?.customerMatch.status).toBe('matched');
+    } finally {
+      vi.unstubAllGlobals();
+      __aiInternals.breakers.clear();
+      resetAiEnv();
+    }
+  });
+
+  it('AI_ENABLED=false -> tắt hoàn toàn dù có key', async () => {
+    resetAiEnv();
+    process.env.GEMINI_API_KEY = 'g';
+    process.env.AI_ENABLED = 'false';
+    const { enrichWithAi } = await import('../services/ai-enrich.js');
+    const pq = { buyer_name: '', buyer_tax_code: '', quote_no: '', quote_date: '', lines: [], declared_subtotal: null, declared_vat: null, declared_total: null, tax_rate: null, payment_terms: '', validity_days: null, warnings: [] };
+    await expect(enrichWithAi(pq as never, [])).resolves.toBeUndefined();
+    resetAiEnv();
   });
 });

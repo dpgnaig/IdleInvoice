@@ -53,6 +53,19 @@ class HealthResponse(BaseModel):
     service: str = "parser"
 
 
+class PreviewSheet(BaseModel):
+    name: str = ""
+    rows: list[list[str]] = Field(default_factory=list)
+
+
+class PreviewDoc(BaseModel):
+    """Dữ liệu thô để UI xem trước file Excel/Word giống PDF."""
+
+    kind: Literal["excel", "word", "pdf"] | str = ""
+    sheets: list[PreviewSheet] = Field(default_factory=list)
+    paragraphs: list[str] = Field(default_factory=list)
+
+
 class ErrorResponse(BaseModel):
     error: str
     error_code: str

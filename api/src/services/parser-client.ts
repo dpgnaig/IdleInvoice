@@ -104,3 +104,42 @@ export function assertParserOk(
     throw new AppError(502, r.message, { errorCode: r.errorCode }, r.errorCode);
   }
 }
+
+export interface PreviewSheet {
+  name: string;
+  rows: string[][];
+}
+
+export interface PreviewDoc {
+  kind: 'excel' | 'word' | 'pdf' | string;
+  sheets: PreviewSheet[];
+  paragraphs: string[];
+}
+
+/** Dữ liệu thô của file Excel/Word để UI hiển thị như trình xem PDF. */
+export async function previewWithPython(
+  buffer: Buffer,
+  filename: string,
+  mime = 'application/octet-stream',
+): Promise<PreviewDoc | null> {
+  const env = getEnv();
+  const form = new FormData();
+  form.append('file', new Blob([new Uint8Array(buffer)], { type: mime }), filename);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch(`${env.PARSER_URL}/preview`, {
+      method: 'POST',
+      body: form,
+      headers: { 'X-Internal-Key': env.INTERNAL_KEY },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as PreviewDoc;
+  } catch (err) {
+    logger.warn({ err, filename }, 'Parser không trả dữ liệu xem trước');
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}

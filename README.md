@@ -1,6 +1,6 @@
 # IdleInvoice — Web lập hóa đơn
 
-Bộ công cụ nội bộ cho kế toán: nhập báo giá PDF/Excel từ nhà cung cấp, đối chiếu với danh mục khách hàng/sản phẩm, soạn nội dung hóa đơn và xuất file Excel đúng mẫu để nhập vào phần mềm hóa đơn.
+Bộ công cụ nội bộ cho kế toán: nhập báo giá PDF/Excel/Word từ nhà cung cấp, đối chiếu với danh mục khách hàng/sản phẩm, soạn nội dung hóa đơn và xuất file Excel đúng mẫu để nhập vào phần mềm hóa đơn.
 
 ## Kiến trúc
 
@@ -55,8 +55,9 @@ uvicorn app.main:app --reload --port 8001
 ```bash
 cd api
 npm ci
-# tạo .env từ .env.example rồi sửa DATABASE_PATH, CORS_ORIGIN, INTERNAL_KEY
-# INTERNAL_KEY phải trùng với parser
+# Cấu hình: tạo api/.env (cũng nhận .env ở gốc repo nếu api/.env không có).
+# Biến đã đặt trong môi trường luôn được ưu tiên hơn giá trị trong file.
+# INTERNAL_KEY phải trùng với parser.
 npm run dev          # http://localhost:3000
 ```
 
@@ -86,6 +87,19 @@ Xem `.env.example`. Bắt buộc:
 - `REGISTRATION_MODE` — `open` (ai cũng đăng ký được), `approval` (mặc định, admin duyệt), `closed`.
 
 Không commit file `.env`.
+
+### Bổ sung bằng AI (tùy chọn)
+
+Báo giá vẫn được đọc bằng bộ phân tích tất định (không cần mạng). Bật AI để xử lý thêm hai việc:
+
+- **Khách hàng**: chuẩn hoá/sửa lỗi tên công ty, đoán MST khi file thiếu, rồi tra VietQR lấy tên và địa chỉ đăng ký.
+- **Hàng hoá**: tách tên hàng / thương hiệu / model / mô tả từ một ô thông số kỹ thuật lẫn lộn, và chọn đúng mã hàng nhất trong các ứng viên do bộ ghép tất định trả về.
+
+Cấu hình `GEMINI_API_KEY` (Google AI Studio) và/hoặc `OPENROUTER_API_KEY`. Chuỗi dự phòng chạy tuần tự: **Gemini → các model free của OpenRouter** (`OPENROUTER_MODELS`), mỗi lần thử bị cắt sau `AI_ATTEMPT_TIMEOUT_MS`; provider vừa lỗi bị tạm ngắt 2 phút để lần sau không phải chờ lại. Không có key, hoặc mọi provider đều lỗi, thì báo giá vẫn hiện bình thường với kết quả ghép tất định.
+
+AI chỉ là gợi ý: không bao giờ ghi đè MST đọc được từ file, và mã hàng AI chọn phải nằm trong danh sách ứng viên (id bịa bị bỏ qua). Tắt hoàn toàn bằng `AI_ENABLED=false`. Lưu ý: nội dung báo giá (tên công ty, thông số kỹ thuật các dòng hàng) sẽ được gửi tới nhà cung cấp model khi bật tính năng này.
+
+**MST chưa có trong danh mục**: api tra `https://api.vietqr.io/v2/business/{MST}` (không cần key) và tự thêm khách hàng với `source = TAX_LOOKUP`. Đặt `AUTO_ADD_CUSTOMER=false` để chỉ gợi ý trên màn hình. Tắt tra cứu ngoài bằng `TAX_LOOKUP_ENABLED=false`; thay nhà cung cấp khác bằng `TAX_LOOKUP_URL` (nhận `?taxCode=` và trả `{name, address}`).
 
 ## Build
 

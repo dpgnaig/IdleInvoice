@@ -5,7 +5,7 @@ import { getDb } from '../db/index.js';
 import { invoiceLines, productAliases, products } from '../db/schema.js';
 import { writeAudit } from '../lib/audit.js';
 import { conflict, notFound } from '../lib/errors.js';
-import { codeKey, normalizeCode } from '../lib/normalize.js';
+import { codeKey, normalizeCode, normalizeText } from '../lib/normalize.js';
 import { asyncHandler } from '../middleware/error.js';
 import { requireRole } from '../middleware/auth.js';
 
@@ -32,7 +32,8 @@ const listQuery = z.object({
 function productSearchCondition(search: string) {
   const term = `%${search}%`;
   const key = codeKey(search);
-  const parts = [like(products.code, term), like(products.name, term)];
+  const normTerm = `%${normalizeText(search)}%`;
+  const parts = [like(products.code, term), sql`norm_text(${products.name}) LIKE ${normTerm}`];
   if (key) parts.push(sql`code_key(${products.code}) LIKE ${`%${key}%`}`);
   return or(...parts);
 }
