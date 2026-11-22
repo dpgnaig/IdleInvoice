@@ -7,17 +7,18 @@ import { useTheme } from '@/lib/theme';
  * (background/foreground/border) thay vì màu mặc định của Sonner.
  *
  * Không dùng `richColors` (xanh/đỏ mặc định của Sonner lệch bảng màu app);
- * thay vào đó style từng loại toast bằng cùng tông với Badge
- * (success/warning/info/destructive) để sáng/tối đều đồng bộ.
+ * thay vào đó style từng loại toast bằng nền ĐẶC màu pastel (không phải lớp phủ
+ * mờ 10% khiến toast nhìn trong suốt, lẫn vào nội dung phía sau) theo đúng tông
+ * success/warning/info/destructive, sáng/tối đều đồng bộ.
  */
 const TOAST_TONES = {
   success:
-    'group-[.toaster]:!border-emerald-500/30 group-[.toaster]:!bg-emerald-500/10 group-[.toaster]:!text-emerald-700 group-[.toaster]:dark:!text-emerald-400',
+    'group-[.toaster]:!border-emerald-500/30 group-[.toaster]:!bg-emerald-50 group-[.toaster]:!text-emerald-700 group-[.toaster]:dark:!bg-emerald-950 group-[.toaster]:dark:!text-emerald-400',
   error:
-    'group-[.toaster]:!border-destructive/30 group-[.toaster]:!bg-destructive/10 group-[.toaster]:!text-destructive',
+    'group-[.toaster]:!border-destructive/30 group-[.toaster]:!bg-red-50 group-[.toaster]:!text-destructive group-[.toaster]:dark:!bg-red-950',
   warning:
-    'group-[.toaster]:!border-amber-500/30 group-[.toaster]:!bg-amber-500/10 group-[.toaster]:!text-amber-700 group-[.toaster]:dark:!text-amber-400',
-  info: 'group-[.toaster]:!border-sky-500/30 group-[.toaster]:!bg-sky-500/10 group-[.toaster]:!text-sky-700 group-[.toaster]:dark:!text-sky-400',
+    'group-[.toaster]:!border-amber-500/30 group-[.toaster]:!bg-amber-50 group-[.toaster]:!text-amber-700 group-[.toaster]:dark:!bg-amber-950 group-[.toaster]:dark:!text-amber-400',
+  info: 'group-[.toaster]:!border-sky-500/30 group-[.toaster]:!bg-sky-50 group-[.toaster]:!text-sky-700 group-[.toaster]:dark:!bg-sky-950 group-[.toaster]:dark:!text-sky-400',
 } as const;
 
 export function Toaster({ ...props }: React.ComponentProps<typeof SonnerToaster>) {
@@ -27,6 +28,7 @@ export function Toaster({ ...props }: React.ComponentProps<typeof SonnerToaster>
       theme={theme}
       className="toaster group"
       toastOptions={{
+        duration: 4000,
         classNames: {
           toast:
             'group toast group-[.toaster]:bg-background group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg',

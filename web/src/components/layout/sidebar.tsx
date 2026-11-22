@@ -49,13 +49,25 @@ export function Sidebar({
       <div className={cn('flex items-center gap-2.5 px-4 py-5', collapsed && 'justify-center px-2')}>
         <img
           src="/logo.png"
-          alt="IdleInvoice"
-          className="h-9 w-9 shrink-0 rounded-lg object-contain"
+          alt="QuoteFlow"
+          className="animate__animated animate__rotateIn h-9 w-9 shrink-0 rounded-lg object-contain"
         />
         {!collapsed && (
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold tracking-tight">IdleInvoice</p>
-            <p className="truncate text-xs text-muted-foreground">Lập hóa đơn từ báo giá</p>
+            <p className="flex truncate bg-gradient-to-r from-primary via-fuchsia-500 to-amber-400 bg-clip-text text-sm font-black tracking-tight text-transparent">
+              {'QuoteFlow'.split('').map((ch, i) => (
+                <span
+                  key={i}
+                  className="animate__animated animate__fadeInUp inline-block"
+                  style={{ animationDelay: `${0.4 + i * 0.05}s` }}
+                >
+                  {ch}
+                </span>
+              ))}
+            </p>
+            <p className="truncate text-xs text-muted-foreground animate__animated animate__fadeIn animate__delay-1s">
+              Lập hóa đơn từ báo giá
+            </p>
           </div>
         )}
       </div>

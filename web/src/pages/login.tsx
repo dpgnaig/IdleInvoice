@@ -83,10 +83,10 @@ export default function LoginPage() {
   return (
     <div className="relative grid min-h-screen bg-background lg:grid-cols-[1.05fr_1fr]">
       {/* Cột trái: giới thiệu sản phẩm */}
-      <aside className="relative hidden overflow-hidden bg-primary p-12 text-primary-foreground lg:flex lg:flex-col lg:justify-between">
+      <aside className="relative hidden overflow-hidden bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 p-12 text-white lg:flex lg:flex-col lg:justify-between">
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 opacity-[0.07]"
+          className="pointer-events-none absolute inset-0 opacity-[0.08]"
           style={{
             backgroundImage:
               'linear-gradient(to right, white 1px, transparent 1px), linear-gradient(to bottom, white 1px, transparent 1px)',
@@ -95,20 +95,22 @@ export default function LoginPage() {
         />
         <div
           aria-hidden
-          className="animate__animated animate__fadeIn animate__slower pointer-events-none absolute -right-28 -top-28 h-[460px] w-[460px] rounded-full bg-white/10 blur-2xl"
+          className="animate__animated animate__fadeIn animate__slower pointer-events-none absolute -right-28 -top-28 h-[460px] w-[460px] rounded-full bg-amber-300/30 blur-3xl"
         />
         <div
           aria-hidden
-          className="animate__animated animate__fadeIn animate__slower animate__delay-1s pointer-events-none absolute -bottom-40 left-1/4 h-[360px] w-[360px] rounded-full bg-white/10 blur-2xl"
+          className="animate__animated animate__fadeIn animate__slower animate__delay-1s pointer-events-none absolute -bottom-40 left-1/4 h-[360px] w-[360px] rounded-full bg-sky-400/30 blur-3xl"
         />
 
         <div className="animate__animated animate__fadeInDown relative z-10 flex items-center gap-3">
           <img
             src="/logo.png"
-            alt="IdleInvoice"
-            className="h-11 w-11 rounded-xl bg-white/10 object-contain p-1 ring-1 ring-white/20"
+            alt="QuoteFlow"
+            className="h-12 w-12 rounded-xl bg-white object-contain p-1 shadow-xl shadow-fuchsia-900/40 ring-2 ring-amber-300/80"
           />
-          <span className="text-lg font-semibold tracking-tight">IdleInvoice</span>
+          <span className="bg-gradient-to-r from-white via-amber-200 to-sky-200 bg-clip-text text-2xl font-black tracking-tight text-transparent drop-shadow-sm">
+            QuoteFlow
+          </span>
         </div>
 
         <div className="relative z-10 max-w-lg">
@@ -146,7 +148,7 @@ export default function LoginPage() {
         </div>
 
         <p className="animate__animated animate__fadeIn relative z-10 text-xs text-primary-foreground/60">
-          © {new Date().getFullYear()} IdleInvoice · Dữ liệu lưu cục bộ trên máy chủ của bạn.
+          © {new Date().getFullYear()} QuoteFlow · Dữ liệu lưu cục bộ trên máy chủ của bạn.
         </p>
       </aside>
 
@@ -162,8 +164,8 @@ export default function LoginPage() {
         />
         <div className="w-full max-w-sm">
           <div className="animate__animated animate__fadeInDown mb-8 flex items-center gap-3 lg:hidden">
-            <img src="/logo.png" alt="IdleInvoice" className="h-10 w-10 rounded-xl object-contain" />
-            <span className="text-lg font-semibold">IdleInvoice</span>
+            <img src="/logo.png" alt="QuoteFlow" className="h-10 w-10 rounded-xl object-contain" />
+            <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-lg font-black text-transparent">QuoteFlow</span>
           </div>
 
           <Card className="animate__animated animate__fadeInUp shadow-lg shadow-primary/5">

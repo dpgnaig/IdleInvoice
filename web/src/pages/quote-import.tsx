@@ -10,7 +10,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { api, apiErrorMessage } from '@/lib/api';
 import { endpoints } from '@/lib/endpoints';
 import { cn, formatMoney, todayIso } from '@/lib/utils';
-import { PageHeader } from '@/components/layout/page-header';
+import { CardPattern, PageHeader } from '@/components/layout/page-header';
 import { Combobox, type ComboOption } from '@/components/ui/combobox';
 import { CountUpMoney } from '@/components/ui/count-up';
 import { Dialog, DialogFooter } from '@/components/ui/dialog';
@@ -140,6 +140,7 @@ interface JobView { id: string; status: 'running' | 'done'; files: JobFileView[]
 export default function QuoteImportPage() {
   const qc = useQueryClient();
   const [dragging, setDragging] = useState(false);
+  const [uploadPatternSeed] = useState(() => Math.random().toString(36).slice(2));
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
   const [uploadNames, setUploadNames] = useState<string[]>([]);
@@ -305,8 +306,8 @@ export default function QuoteImportPage() {
   const TABS = [
     { key: 'processing' as const, label: 'Đang xử lý', count: processingFiles.length, show: showProcessing },
     { key: 'all' as const, label: 'Tất cả', count: drafts.length, show: true },
-    { key: 'ok' as const, label: 'OK', count: readyCount, show: true },
-    { key: 'need' as const, label: 'Chưa OK', count: needCount, show: true },
+    { key: 'ok' as const, label: 'Sẵn sàng xác nhận', count: readyCount, show: true },
+    { key: 'need' as const, label: 'Cần kiểm tra', count: needCount, show: true },
   ].filter((t) => t.show);
 
   const visibleDrafts = drafts
@@ -327,11 +328,25 @@ export default function QuoteImportPage() {
         onDrop={(e) => { e.preventDefault(); setDragging(false); void handleFiles(e.dataTransfer.files); }}
         animate={dragging ? { scale: 1.004 } : { scale: 1 }}
         className={cn(
-          'relative block cursor-pointer overflow-hidden rounded-2xl border bg-card shadow-sm transition-colors',
-          dragging ? 'border-primary ring-2 ring-primary/20' : 'border-border/80 hover:border-primary/40',
+          'relative block cursor-pointer overflow-hidden rounded-2xl p-[1.5px] shadow-sm transition-shadow',
+          dragging ? 'ring-2 ring-primary/30' : '',
         )}
       >
+        <motion.div
+          aria-hidden
+          className="pointer-events-none absolute left-1/2 top-1/2 h-[300%] w-[300%]"
+          style={{
+            x: '-50%',
+            y: '-50%',
+            background:
+              'conic-gradient(from 0deg, transparent 0deg, hsl(var(--primary)) 70deg, hsl(var(--primary) / 0.25) 140deg, transparent 220deg, hsl(var(--primary) / 0.6) 300deg, transparent 360deg)',
+          }}
+          animate={{ rotate: 360 }}
+          transition={{ repeat: Infinity, duration: dragging ? 1.6 : 5, ease: 'linear' }}
+        />
+        <div className="relative overflow-hidden rounded-[14.5px] bg-card">
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-sky-500/5" />
+        <CardPattern seed={uploadPatternSeed} compact />
         <div
           className={cn(
             'relative flex flex-col items-center gap-5 text-center sm:flex-row sm:text-left',
@@ -375,6 +390,7 @@ export default function QuoteImportPage() {
           className="sr-only"
           onChange={(e) => { void handleFiles(e.target.files); e.target.value = ''; }}
         />
+        </div>
       </motion.label>
 
       {(drafts.length > 0 || processingFiles.length > 0) && (
@@ -437,7 +453,7 @@ export default function QuoteImportPage() {
                 <div className="rounded-xl border border-dashed bg-card px-4 py-10 text-center text-sm text-muted-foreground">
                   {drafts.length === 0
                     ? 'Chưa có báo giá nào — đang chờ đọc xong file vừa tải lên.'
-                    : `Không có báo giá nào ở mục "${viewTab === 'ok' ? 'OK' : 'Chưa OK'}".`}
+                    : `Không có báo giá nào ở mục "${viewTab === 'ok' ? 'Sẵn sàng xác nhận' : 'Cần kiểm tra'}".`}
                 </div>
               )}
               <AnimatePresence>

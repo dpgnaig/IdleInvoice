@@ -54,8 +54,8 @@ export default function RegisterPage() {
     <div className="flex min-h-screen items-center justify-center px-5 py-12">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex items-center gap-3">
-          <img src="/logo.png" alt="IdleInvoice" className="h-10 w-10 rounded-xl object-contain" />
-          <span className="text-lg font-semibold">IdleInvoice</span>
+          <img src="/logo.png" alt="QuoteFlow" className="h-10 w-10 rounded-xl object-contain" />
+          <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-lg font-black text-transparent">QuoteFlow</span>
         </div>
 
         {done ? (

@@ -22,7 +22,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <BrowserRouter>
           <AuthProvider>
             <AppRoutes />
-            <Toaster position="bottom-right" closeButton expand={false} />
+            <Toaster position="top-right" closeButton expand={false} />
           </AuthProvider>
         </BrowserRouter>
       </QueryClientProvider>

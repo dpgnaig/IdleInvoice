@@ -275,10 +275,12 @@ export default function SetupPage() {
         <div className="relative z-10 flex items-center gap-3">
           <img
             src="/logo.png"
-            alt="IdleInvoice"
-            className="h-11 w-11 rounded-xl bg-white/10 object-contain p-1 ring-1 ring-white/20"
+            alt="QuoteFlow"
+            className="h-11 w-11 rounded-xl bg-white object-contain p-1 shadow-xl shadow-fuchsia-900/40 ring-2 ring-amber-300/80"
           />
-          <span className="text-lg font-semibold tracking-tight">IdleInvoice</span>
+          <span className="bg-gradient-to-r from-white via-amber-200 to-sky-200 bg-clip-text text-xl font-black tracking-tight text-transparent">
+            QuoteFlow
+          </span>
         </div>
 
         <div className="relative z-10">
@@ -289,7 +291,7 @@ export default function SetupPage() {
           <h1 className="mt-5 text-3xl font-semibold leading-tight tracking-tight">
             Bắt đầu với
             <br />
-            IdleInvoice
+            QuoteFlow
           </h1>
           <p className="mt-3 max-w-xs text-sm leading-relaxed text-primary-foreground/80">
             Ba bước nhanh để tạo tài khoản quản trị và nạp sẵn danh mục khách hàng, hàng hóa.
@@ -355,9 +357,9 @@ export default function SetupPage() {
         <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col justify-center px-5 py-10 sm:px-8">
           {/* Thương hiệu + stepper gọn cho màn nhỏ */}
           <div className="mb-6 flex items-center gap-3 lg:hidden">
-            <img src="/logo.png" alt="IdleInvoice" className="h-10 w-10 rounded-xl object-contain" />
+            <img src="/logo.png" alt="QuoteFlow" className="h-10 w-10 rounded-xl object-contain" />
             <div>
-              <p className="text-base font-semibold leading-tight">IdleInvoice</p>
+              <p className="text-base font-semibold leading-tight">QuoteFlow</p>
               <p className="text-xs text-muted-foreground">Thiết lập ban đầu</p>
             </div>
           </div>
