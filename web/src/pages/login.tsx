@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import {
   ArrowRight,
   Eye,
@@ -89,7 +89,7 @@ export default function LoginPage() {
   return (
     <div className="relative grid min-h-screen bg-background lg:grid-cols-[1.05fr_1fr]">
       {/* Cột trái: giới thiệu sản phẩm */}
-      <aside className="relative hidden overflow-hidden bg-gradient-to-br from-indigo-600 via-violet-600 to-fuchsia-600 p-12 text-white lg:flex lg:flex-col lg:justify-between">
+      <aside className="relative hidden overflow-hidden bg-gradient-to-br from-pink-600 via-rose-500 to-fuchsia-600 p-12 text-white lg:flex lg:flex-col lg:justify-between">
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0 opacity-[0.08]"
@@ -105,10 +105,10 @@ export default function LoginPage() {
         />
         <div
           aria-hidden
-          className="animate__animated animate__fadeIn animate__slower animate__delay-1s pointer-events-none absolute -bottom-40 left-1/4 h-[360px] w-[360px] rounded-full bg-sky-400/30 blur-3xl"
+          className="animate__animated animate__fadeIn animate__slower animate__delay-1s pointer-events-none absolute -bottom-40 left-1/4 h-[360px] w-[360px] rounded-full bg-fuchsia-300/30 blur-3xl"
         />
 
-        <div className="animate__animated animate__fadeInDown relative z-10 flex items-center gap-3">
+        <div className="animate__animated animate__fadeIn relative z-10 flex items-center gap-3">
           <img
             src="/logo.png"
             alt="QuoteFlow"
@@ -120,16 +120,16 @@ export default function LoginPage() {
         </div>
 
         <div className="relative z-10 max-w-lg">
-          <span className="animate__animated animate__fadeInUp inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-medium ring-1 ring-white/20">
+          <span className="animate__animated animate__fadeIn inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-medium ring-1 ring-white/20">
             <Sparkles className="h-3.5 w-3.5" />
             Đọc báo giá, ghép mã hàng, xuất hóa đơn
           </span>
-          <h1 className="animate__animated animate__fadeInUp mt-5 text-4xl font-semibold leading-[1.15] tracking-tight">
+          <h1 className="animate__animated animate__fadeIn mt-5 text-4xl font-semibold leading-[1.15] tracking-tight">
             Biến báo giá thành hóa đơn,
             <br />
             không nhập tay từng dòng.
           </h1>
-          <p className="animate__animated animate__fadeInUp mt-4 max-w-md text-sm leading-relaxed text-primary-foreground/80">
+          <p className="animate__animated animate__fadeIn mt-4 max-w-md text-sm leading-relaxed text-primary-foreground/80">
             Tải báo giá PDF, Excel hoặc Word lên. Hệ thống bóc tách bảng hàng hóa, ghép khách hàng và
             mã hàng với danh mục, rồi xuất file Excel đúng mẫu để import vào phần mềm hóa đơn.
           </p>
@@ -138,7 +138,7 @@ export default function LoginPage() {
             {FEATURES.map((f, i) => (
               <li
                 key={f.title}
-                className="animate__animated animate__fadeInLeft flex items-start gap-3"
+                className="animate__animated animate__fadeIn flex items-start gap-3"
                 style={{ animationDelay: `${360 + i * 140}ms` }}
               >
                 <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/10 ring-1 ring-white/15">
@@ -169,12 +169,12 @@ export default function LoginPage() {
           }}
         />
         <div className="w-full max-w-sm">
-          <div className="animate__animated animate__fadeInDown mb-8 flex items-center gap-3 lg:hidden">
+          <div className="animate__animated animate__fadeIn mb-8 flex items-center gap-3 lg:hidden">
             <img src="/logo.png" alt="QuoteFlow" className="h-10 w-10 rounded-xl object-contain" />
-            <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-lg font-brand font-black text-transparent">QuoteFlow</span>
+            <span className="bg-gradient-to-r from-pink-600 via-rose-500 to-fuchsia-600 bg-clip-text text-lg font-brand font-black text-transparent">QuoteFlow</span>
           </div>
 
-          <Card className="animate__animated animate__fadeInUp shadow-lg shadow-primary/5">
+          <Card className="animate__animated animate__fadeIn shadow-lg shadow-primary/5">
             <CardHeader>
               <CardTitle className="text-2xl tracking-tight">Đăng nhập</CardTitle>
               <CardDescription>Dùng tài khoản do quản trị viên cấp.</CardDescription>
@@ -182,7 +182,7 @@ export default function LoginPage() {
             <CardContent>
               <form onSubmit={handleSubmit(onSubmit)} className="grid gap-4" noValidate>
                 <div
-                  className="animate__animated animate__fadeInUp"
+                  className="animate__animated animate__fadeIn"
                   style={{ animationDelay: '120ms' }}
                 >
                   <Field label="Email" htmlFor="email" error={errors.email?.message}>
@@ -199,7 +199,7 @@ export default function LoginPage() {
                 </div>
 
                 <div
-                  className="animate__animated animate__fadeInUp"
+                  className="animate__animated animate__fadeIn"
                   style={{ animationDelay: '200ms' }}
                 >
                   <Field label="Mật khẩu" htmlFor="password" error={errors.password?.message}>
@@ -236,7 +236,7 @@ export default function LoginPage() {
 
                 <Button
                   type="submit"
-                  className={cn('group mt-1 w-full', !isSubmitting && 'animate__animated animate__fadeInUp')}
+                  className={cn('group mt-1 w-full', !isSubmitting && 'animate__animated animate__fadeIn')}
                   style={{ animationDelay: '280ms' }}
                   disabled={isSubmitting}
                 >

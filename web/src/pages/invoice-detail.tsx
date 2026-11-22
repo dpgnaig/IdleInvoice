@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import { AlertTriangle, ArrowLeft, Loader2, Plus, Save, Trash2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { endpoints } from '@/lib/endpoints';

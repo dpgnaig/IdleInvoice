@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import { History, Loader2, Trash2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { endpoints } from '@/lib/endpoints';

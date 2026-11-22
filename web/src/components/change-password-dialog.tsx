@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import { KeyRound, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api, apiErrorMessage, tokenStore } from '@/lib/api';

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import {
   ArrowRight,
   Check,
@@ -225,7 +225,7 @@ export default function SetupPage() {
         </motion.div>
         <motion.h1
           initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
+          animate={{ opacity: 1 }}
           transition={{ delay: 0.15 }}
           className="relative z-10 mt-7 text-2xl font-semibold tracking-tight sm:text-3xl"
         >
@@ -233,7 +233,7 @@ export default function SetupPage() {
         </motion.h1>
         <motion.p
           initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
+          animate={{ opacity: 1 }}
           transition={{ delay: 0.25 }}
           className="relative z-10 mt-2 max-w-sm text-sm text-muted-foreground"
         >
@@ -506,7 +506,7 @@ export default function SetupPage() {
                   )}
 
                   {preview && (
-                    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="grid gap-4">
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="grid gap-4">
                       <div className="grid gap-3 sm:grid-cols-2">
                         <SummaryCard
                           title="Khách hàng (DSKH)"

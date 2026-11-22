@@ -3,7 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import { Download, Loader2, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { endpoints } from '@/lib/endpoints';

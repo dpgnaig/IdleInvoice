@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -10,14 +11,13 @@ import {
   Shield,
   ChevronsLeft,
   ChevronsRight,
-  Sun,
-  Moon,
+  Palette,
   LogOut,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth';
-import { useTheme } from '@/lib/theme';
+import { AppearanceDialog } from '@/components/layout/appearance-dialog';
 
 const NAV = [
   { to: '/', label: 'Tổng quan', icon: LayoutDashboard, end: true },
@@ -41,8 +41,8 @@ export function Sidebar({
   onMobileClose: () => void;
 }) {
   const { user, logout } = useAuth();
-  const { theme, toggle } = useTheme();
   const location = useLocation();
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
 
   const content = (
     <div className="flex h-full flex-col">
@@ -58,7 +58,7 @@ export function Sidebar({
               {'QuoteFlow'.split('').map((ch, i) => (
                 <span
                   key={i}
-                  className="animate__animated animate__fadeInUp inline-block"
+                  className="animate__animated animate__fadeIn inline-block"
                   style={{ animationDelay: `${0.4 + i * 0.05}s` }}
                 >
                   {ch}
@@ -112,11 +112,12 @@ export function Sidebar({
         <Button
           type="button"
           variant="ghost"
-          onClick={toggle}
+          onClick={() => setAppearanceOpen(true)}
+          title={collapsed ? 'Giao diện' : undefined}
           className={cn('w-full justify-start px-2.5 font-medium text-muted-foreground', collapsed && 'justify-center px-2')}
         >
-          {theme === 'dark' ? <Sun /> : <Moon />}
-          {!collapsed && <span>{theme === 'dark' ? 'Giao diện sáng' : 'Giao diện tối'}</span>}
+          <Palette />
+          {!collapsed && <span>Giao diện</span>}
         </Button>
         <Button
           type="button"
@@ -146,6 +147,7 @@ export function Sidebar({
 
   return (
     <>
+      <AppearanceDialog open={appearanceOpen} onOpenChange={setAppearanceOpen} />
       <motion.aside
         className="sticky top-0 hidden h-screen shrink-0 border-r bg-card lg:block"
         animate={{ width: collapsed ? 76 : 248 }}

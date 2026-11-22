@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { motion } from 'framer-motion';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import { CheckCircle2, Loader2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { endpoints } from '@/lib/endpoints';
@@ -55,11 +55,11 @@ export default function RegisterPage() {
       <div className="w-full max-w-sm">
         <div className="mb-8 flex items-center gap-3">
           <img src="/logo.png" alt="QuoteFlow" className="h-10 w-10 rounded-xl object-contain" />
-          <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-lg font-brand font-black text-transparent">QuoteFlow</span>
+          <span className="bg-gradient-to-r from-pink-600 via-rose-500 to-fuchsia-600 bg-clip-text text-lg font-brand font-black text-transparent">QuoteFlow</span>
         </div>
 
         {done ? (
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <Card>
               <CardHeader>
                 <CheckCircle2 className="h-9 w-9 text-primary" />

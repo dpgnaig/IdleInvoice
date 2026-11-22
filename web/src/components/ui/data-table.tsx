@@ -150,7 +150,7 @@ export function DataTable<T>({
   const hasToolbar = Boolean(toolbar) || showColumnToggle;
 
   return (
-    <div ref={cardRef} className="rounded-xl border bg-card text-card-foreground shadow-sm">
+    <div ref={cardRef} className="animate__animated animate__fadeIn rounded-xl border bg-card text-card-foreground shadow-sm">
       {hasToolbar && (
         <div data-chrome className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">{toolbar}</div>

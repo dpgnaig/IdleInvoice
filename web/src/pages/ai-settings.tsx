@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import {
   Bot,
   Download,
@@ -355,7 +355,7 @@ export default function AiSettingsPage({
   return (
     <div>
       {embedded ? (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 animate__animated animate__fadeIn">
           <div>{embeddedToolbar}</div>
           <div className="flex flex-wrap items-center gap-2">{actions}</div>
         </div>
@@ -367,14 +367,14 @@ export default function AiSettingsPage({
         />
       )}
 
-      <Card className="mb-4">
-        <CardContent className="flex flex-wrap items-center justify-between gap-4 p-5">
+      <Card className="mb-4 animate__animated animate__fadeIn">
+        <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent text-accent-foreground">
               <Bot className="h-4 w-4" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
                 <p className="text-sm font-medium">Bổ sung bằng AI</p>
                 <Badge variant={providers.data?.enabled ? 'success' : 'secondary'}>
                   {providers.data?.enabled ? 'Đang bật' : 'Đang tắt'}
@@ -388,6 +388,7 @@ export default function AiSettingsPage({
             </div>
           </div>
           <Button
+            className="w-full sm:w-auto"
             variant={providers.data?.enabled ? 'outline' : 'default'}
             disabled={toggleGlobal.isPending || !providers.data}
             onClick={() => toggleGlobal.mutate(!providers.data?.enabled)}
@@ -413,7 +414,7 @@ export default function AiSettingsPage({
           />
         </Card>
       ) : (
-        <div className="grid gap-3">
+        <div className="grid gap-3 animate__animated animate__fadeIn">
           <p className="text-xs text-muted-foreground">
             Kéo tay nắm bên trái để đổi thứ tự ưu tiên; provider ở trên được gọi trước.
           </p>
@@ -424,7 +425,7 @@ export default function AiSettingsPage({
               onDrop={(e) => { e.preventDefault(); if (canReorder) moveRow(index); }}
               className={cn('transition-opacity', dragIndex === index && 'opacity-50')}
             >
-              <CardContent className="flex flex-wrap items-center justify-between gap-4 p-4">
+              <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                 <div className="flex min-w-0 items-start gap-2">
                   <span
                     draggable={canReorder}
@@ -454,17 +455,17 @@ export default function AiSettingsPage({
                       {row.enabled && !row.hasKey && <Badge variant="warning">Thiếu API key</Badge>}
                     </div>
                     <p className="mt-1 truncate font-mono text-xs text-muted-foreground">{row.model}</p>
-                    <p className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+                    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
                       <RadioTower className="h-3 w-3 shrink-0" />
-                      {row.baseUrl || kinds.find((k) => k.value === row.kind)?.baseUrl}
-                      <span className="inline-flex items-center gap-1 pl-2">
+                      <span className="min-w-0 truncate">{row.baseUrl || kinds.find((k) => k.value === row.kind)?.baseUrl}</span>
+                      <span className="inline-flex shrink-0 items-center gap-1 pl-2">
                         <KeyRound className="h-3 w-3 shrink-0" />
                         {row.hasKey ? row.apiKeyMasked : 'chưa có'}
                       </span>
-                    </p>
+                    </div>
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5 pl-8 sm:pl-0">
                   <Button
                     variant="outline"
                     size="sm"

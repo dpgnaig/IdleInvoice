@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import {
   AlertTriangle, Bot, Building2, CheckCircle2, FileText, FileUp, Info,
   Loader2, Package, Plus, SearchCheck, Trash2, UploadCloud, X, XCircle,
@@ -339,13 +339,13 @@ export default function QuoteImportPage() {
             x: '-50%',
             y: '-50%',
             background:
-              'conic-gradient(from 0deg, transparent 0deg, hsl(var(--primary)) 70deg, hsl(var(--primary) / 0.25) 140deg, transparent 220deg, hsl(var(--primary) / 0.6) 300deg, transparent 360deg)',
+              'conic-gradient(from 0deg, transparent 0deg, transparent 260deg, hsl(var(--primary) / 0.4) 310deg, hsl(var(--primary)) 340deg, hsl(var(--primary) / 0.4) 360deg)',
           }}
           animate={{ rotate: 360 }}
-          transition={{ repeat: Infinity, duration: dragging ? 1.6 : 5, ease: 'linear' }}
+          transition={{ repeat: Infinity, duration: dragging ? 1.6 : 3.2, ease: 'linear' }}
         />
         <div className="relative overflow-hidden rounded-[14.5px] bg-card">
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-sky-500/5" />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-fuchsia-500/5" />
         <CardPattern seed={uploadPatternSeed} compact />
         <div
           className={cn(
@@ -462,7 +462,7 @@ export default function QuoteImportPage() {
                     key={d.fileHash + idx}
                     layout
                     initial={{ opacity: 0, y: 14 }}
-                    animate={{ opacity: 1, y: 0 }}
+                    animate={{ opacity: 1 }}
                     exit={{ opacity: 0, scale: 0.99 }}
                     transition={{ delay: Math.min(idx * 0.05, 0.3) }}
                     className="overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm"
@@ -1151,8 +1151,8 @@ function DraftSkeleton({ file }: { file: JobFileView }) {
   const done = file.stage === 'done';
   return (
     <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
       aria-busy="true"
       className="overflow-hidden rounded-xl border bg-card shadow-sm"
     >

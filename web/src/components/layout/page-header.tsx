@@ -1,4 +1,5 @@
 import { useMemo, type ReactNode } from 'react';
+import { motion } from 'framer-motion';
 
 /**
  * Tiêu đề trang gọn một hàng: tên trang + mô tả 1 dòng bên trái, nút chức năng bên phải.
@@ -15,7 +16,7 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-      <div className="min-w-0">
+      <div className="min-w-0 animate__animated animate__fadeIn">
         <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
         {description && (
           <p className="mt-0.5 line-clamp-1 text-sm text-muted-foreground" title={description}>
@@ -23,7 +24,9 @@ export function PageHeader({
           </p>
         )}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+      {actions && (
+        <div className="flex flex-wrap items-center gap-2 animate__animated animate__fadeIn">{actions}</div>
+      )}
     </div>
   );
 }
@@ -115,29 +118,48 @@ export function StatCard({
   hint,
   icon,
   accent,
+  delay = 0,
 }: {
   label: string;
   value: ReactNode;
   hint?: string;
   icon?: ReactNode;
   accent?: boolean;
+  delay?: number;
 }) {
   return (
-    <div className="relative overflow-hidden rounded-xl border bg-card p-5 text-card-foreground shadow-sm">
-      <CardPattern seed={label} />
-      <div className="relative flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-muted-foreground">{label}</p>
-          <div className={`mt-2 text-2xl font-semibold tracking-tight ${accent ? 'text-primary' : ''}`}>
-            {value}
+    <div
+      className="animate__animated animate__fadeIn relative flex flex-col overflow-hidden rounded-xl p-[1.5px] shadow-sm"
+      style={{ animationDelay: `${delay}ms` }}
+    >
+      <motion.div
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 top-1/2 h-[300%] w-[300%]"
+        style={{
+          x: '-50%',
+          y: '-50%',
+          background:
+            'conic-gradient(from 0deg, transparent 0deg, hsl(var(--primary)) 70deg, hsl(var(--primary) / 0.25) 140deg, transparent 220deg, hsl(var(--primary) / 0.6) 300deg, transparent 360deg)',
+        }}
+        animate={{ rotate: 360 }}
+        transition={{ repeat: Infinity, duration: 6, ease: 'linear' }}
+      />
+      <div className="relative flex flex-1 flex-col overflow-hidden rounded-[10.5px] bg-card p-5 text-card-foreground">
+        <CardPattern seed={label} />
+        <div className="relative flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-muted-foreground">{label}</p>
+            <div className={`mt-2 text-2xl font-semibold tracking-tight ${accent ? 'text-primary' : ''}`}>
+              {value}
+            </div>
+            {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
           </div>
-          {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
+          {icon && (
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent text-accent-foreground">
+              {icon}
+            </div>
+          )}
         </div>
-        {icon && (
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent text-accent-foreground">
-            {icon}
-          </div>
-        )}
       </div>
     </div>
   );

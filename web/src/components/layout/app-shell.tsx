@@ -40,8 +40,8 @@ export function AppShell() {
         <main className="flex-1 px-4 py-4 lg:px-6 lg:py-5" id="main">
           <motion.div
             key={location.pathname}
-            initial={reduce ? undefined : { opacity: 0, y: 8 }}
-            animate={reduce ? undefined : { opacity: 1, y: 0 }}
+            initial={reduce ? undefined : { opacity: 0 }}
+            animate={reduce ? undefined : { opacity: 1 }}
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
           >
             <Outlet />

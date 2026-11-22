@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
+import { toast } from '@/components/ui/sonner';
 import { AlertTriangle, ArrowLeft, FileText, Loader2, Trash2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { endpoints } from '@/lib/endpoints';
@@ -113,7 +113,7 @@ export default function QuoteDetailPage() {
         }
       />
 
-      <div className="grid items-start gap-4 lg:grid-cols-3">
+      <div className="grid items-start gap-4 lg:grid-cols-3 animate__animated animate__fadeIn">
         <Card className="lg:col-span-2">
           <CardContent className="p-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Thông tin báo giá</p>
@@ -150,7 +150,7 @@ export default function QuoteDetailPage() {
         </Card>
       </div>
 
-      <Card className="mt-4 overflow-hidden">
+      <Card className="mt-4 overflow-hidden animate__animated animate__fadeIn">
         <div className="border-b px-5 py-3.5">
           <p className="text-sm font-medium">Hàng hóa ({lines.length} dòng)</p>
         </div>
