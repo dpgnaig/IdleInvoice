@@ -9,6 +9,7 @@ import {
   Eye,
   EyeOff,
   FileSpreadsheet,
+  Link2,
   Loader2,
   ShieldCheck,
   Sparkles,
@@ -32,18 +33,23 @@ type FormValues = z.infer<typeof schema>;
 const FEATURES = [
   {
     icon: FileSpreadsheet,
-    title: 'Đọc PDF, Excel, Word',
-    text: 'Tải báo giá lên, hệ thống tự bóc tách bảng hàng hóa.',
+    title: 'Bóc tách PDF, Excel, Word',
+    text: 'Đọc bảng hàng hóa trực tiếp từ file báo giá, không phải gõ lại.',
+  },
+  {
+    icon: Link2,
+    title: 'Ghép khách hàng và mã hàng',
+    text: 'So khớp mờ với danh mục; dòng nào chưa chắc chắn được đánh dấu để bạn kiểm tra.',
   },
   {
     icon: Sparkles,
-    title: 'AI đối chiếu từng dòng',
-    text: 'Ghép khách hàng và mã hàng trong danh mục, cảnh báo chỗ lệch.',
+    title: 'AI rà soát khi bạn bật',
+    text: 'Chuẩn hóa tên khách và chọn mã đúng nhất trong ứng viên. Chỉ gợi ý, không ghi đè MST đọc từ file.',
   },
   {
     icon: ShieldCheck,
-    title: 'Dữ liệu là của bạn',
-    text: 'Mọi thứ lưu cục bộ trên máy chủ, không gửi ra ngoài ngoài ý muốn.',
+    title: 'Dữ liệu ở máy chủ của bạn',
+    text: 'Lưu trong cơ sở dữ liệu cục bộ. Khi bật AI, nội dung báo giá được gửi tới nhà cung cấp model đã cấu hình.',
   },
 ];
 
@@ -108,7 +114,7 @@ export default function LoginPage() {
             alt="QuoteFlow"
             className="h-12 w-12 rounded-xl bg-white object-contain p-1 shadow-xl shadow-fuchsia-900/40 ring-2 ring-amber-300/80"
           />
-          <span className="bg-gradient-to-r from-white via-amber-200 to-sky-200 bg-clip-text text-2xl font-black tracking-tight text-transparent drop-shadow-sm">
+          <span className="bg-gradient-to-r from-white via-amber-200 to-sky-200 bg-clip-text text-2xl font-brand font-black tracking-tight text-transparent drop-shadow-sm">
             QuoteFlow
           </span>
         </div>
@@ -116,16 +122,16 @@ export default function LoginPage() {
         <div className="relative z-10 max-w-lg">
           <span className="animate__animated animate__fadeInUp inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-medium ring-1 ring-white/20">
             <Sparkles className="h-3.5 w-3.5" />
-            Đọc báo giá tự động bằng AI
+            Đọc báo giá, ghép mã hàng, xuất hóa đơn
           </span>
           <h1 className="animate__animated animate__fadeInUp mt-5 text-4xl font-semibold leading-[1.15] tracking-tight">
-            Lập hóa đơn từ báo giá,
+            Biến báo giá thành hóa đơn,
             <br />
-            không còn nhập tay từng dòng.
+            không nhập tay từng dòng.
           </h1>
           <p className="animate__animated animate__fadeInUp mt-4 max-w-md text-sm leading-relaxed text-primary-foreground/80">
-            Tải báo giá lên, hệ thống đọc dữ liệu, ghép khách hàng và mã hàng trong danh mục, rồi
-            xuất file Excel đúng mẫu để import lên phần mềm hóa đơn.
+            Tải báo giá PDF, Excel hoặc Word lên. Hệ thống bóc tách bảng hàng hóa, ghép khách hàng và
+            mã hàng với danh mục, rồi xuất file Excel đúng mẫu để import vào phần mềm hóa đơn.
           </p>
 
           <ul className="mt-10 grid gap-4">
@@ -165,7 +171,7 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           <div className="animate__animated animate__fadeInDown mb-8 flex items-center gap-3 lg:hidden">
             <img src="/logo.png" alt="QuoteFlow" className="h-10 w-10 rounded-xl object-contain" />
-            <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-lg font-black text-transparent">QuoteFlow</span>
+            <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-fuchsia-600 bg-clip-text text-lg font-brand font-black text-transparent">QuoteFlow</span>
           </div>
 
           <Card className="animate__animated animate__fadeInUp shadow-lg shadow-primary/5">

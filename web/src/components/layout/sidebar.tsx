@@ -54,7 +54,7 @@ export function Sidebar({
         />
         {!collapsed && (
           <div className="min-w-0">
-            <p className="flex truncate bg-gradient-to-r from-primary via-fuchsia-500 to-amber-400 bg-clip-text text-sm font-black tracking-tight text-transparent">
+            <p className="flex truncate bg-gradient-to-r from-primary via-fuchsia-500 to-amber-400 bg-clip-text text-sm font-brand font-black tracking-tight text-transparent">
               {'QuoteFlow'.split('').map((ch, i) => (
                 <span
                   key={i}

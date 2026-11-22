@@ -278,7 +278,7 @@ export default function SetupPage() {
             alt="QuoteFlow"
             className="h-11 w-11 rounded-xl bg-white object-contain p-1 shadow-xl shadow-fuchsia-900/40 ring-2 ring-amber-300/80"
           />
-          <span className="bg-gradient-to-r from-white via-amber-200 to-sky-200 bg-clip-text text-xl font-black tracking-tight text-transparent">
+          <span className="bg-gradient-to-r from-white via-amber-200 to-sky-200 bg-clip-text text-xl font-brand font-black tracking-tight text-transparent">
             QuoteFlow
           </span>
         </div>
@@ -359,7 +359,7 @@ export default function SetupPage() {
           <div className="mb-6 flex items-center gap-3 lg:hidden">
             <img src="/logo.png" alt="QuoteFlow" className="h-10 w-10 rounded-xl object-contain" />
             <div>
-              <p className="text-base font-semibold leading-tight">QuoteFlow</p>
+              <p className="font-brand text-base font-semibold leading-tight">QuoteFlow</p>
               <p className="text-xs text-muted-foreground">Thiết lập ban đầu</p>
             </div>
           </div>
