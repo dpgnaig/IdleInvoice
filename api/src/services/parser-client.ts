@@ -143,3 +143,73 @@ export async function previewWithPython(
     clearTimeout(timeout);
   }
 }
+
+/* ---------- Tìm tương tự bằng rapidfuzz (parser service) ---------- */
+
+export interface FuzzyCustomerCandidate {
+  id: number;
+  name: string;
+  taxCode: string;
+  score: number;
+}
+
+export interface FuzzyProductCandidate {
+  id: number;
+  code: string;
+  name: string;
+  unit: string;
+  score: number;
+  codeScore: number;
+  textScore: number;
+}
+
+async function postMatch<T>(path: string, payload: unknown, timeoutMs = 20_000): Promise<T | null> {
+  const env = getEnv();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${env.PARSER_URL}${path}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      headers: { 'Content-Type': 'application/json', 'X-Internal-Key': env.INTERNAL_KEY },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch (err) {
+    logger.warn({ err, path }, 'Không gọi được tìm tương tự (rapidfuzz)');
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Xếp hạng tên công ty gần giống trong danh mục. null khi parser tắt/lỗi. */
+export async function fuzzyMatchCustomers(
+  query: string,
+  customers: Array<{ id: number; name: string; taxCode: string }>,
+  limit = 20,
+): Promise<FuzzyCustomerCandidate[] | null> {
+  if (!query.trim() || !customers.length) return [];
+  const res = await postMatch<{ candidates: FuzzyCustomerCandidate[] }>('/match/customers', {
+    query,
+    customers,
+    limit,
+  });
+  return res?.candidates ?? null;
+}
+
+/** Xếp hạng mã hàng cho từng dòng, kết hợp mã + mô tả. null khi parser tắt/lỗi. */
+export async function fuzzyMatchProducts(
+  lines: Array<{ name: string; model: string; spec: string; brand: string }>,
+  products: Array<{ id: number; code: string; name: string; unit: string }>,
+  limit = 20,
+): Promise<FuzzyProductCandidate[][] | null> {
+  if (!lines.length || !products.length) return lines.map(() => []);
+  const res = await postMatch<{ lines: FuzzyProductCandidate[][] }>('/match/products', {
+    lines,
+    products,
+    limit,
+  });
+  return res?.lines ?? null;
+}

@@ -5,6 +5,7 @@ export type JobStage =
   | 'queued'
   | 'parsing'
   | 'matching'
+  | 'fuzzy'
   | 'ai'
   | 'tax_lookup'
   | 'done'
@@ -64,12 +65,17 @@ export function finishJob(id: string): void {
   if (job) job.status = 'done';
 }
 
-/** Payload gửi cho client: bỏ draft khi job chưa xong để polling nhẹ. */
+/**
+ * Payload gửi cho client: bỏ draft khi file chưa xong để polling nhẹ.
+ * Mỗi file trả `draft` ngay khi CHÍNH NÓ xong (done/error) — không đợi cả phiên
+ * tải lên kết thúc, để UI hiện báo giá đã đọc xong ngay, file còn lại vẫn
+ * thấy đang xử lý song song.
+ */
 export function jobView(job: QuoteJob) {
   return {
     id: job.id,
     status: job.status,
     files: job.files.map(({ draft: _draft, ...rest }) => rest),
-    drafts: job.status === 'done' ? job.files.map((f) => f.draft).filter(Boolean) : undefined,
+    drafts: job.files.map((f) => f.draft).filter(Boolean),
   };
 }

@@ -12,6 +12,7 @@ import { getDb } from '../db/index.js';
 import { customers } from '../db/schema.js';
 import { logger } from '../lib/logger.js';
 import { normalizeTaxCode, normalizeText, simplifyCompanyName } from '../lib/normalize.js';
+import { z } from 'zod';
 import { aiCompleteWithProvider, extractJson, mapLimit } from './ai.js';
 import { aiGlobalEnabled } from './ai-providers.js';
 import type { ParsedQuote } from './parser-client.js';
@@ -21,6 +22,18 @@ import { candidatesForAi, confidentCustomer, tokenScore, type CustomerMatch, typ
 const AI_BULK_DEADLINE_MS = Number(process.env.AI_BULK_DEADLINE_MS ?? 20_000);
 const AI_LINES_DEADLINE_MS = Number(process.env.AI_LINES_DEADLINE_MS ?? 20_000);
 const AI_LINE_CONCURRENCY = Number(process.env.AI_LINE_CONCURRENCY ?? 3);
+// Dưới ngưỡng này, gợi ý của AI vẫn được áp dụng nhưng kèm cảnh báo "cần soát lại"
+// thay vì âm thầm tin tưởng tuyệt đối — field confidence AI trả về giờ được dùng thật.
+const LOW_CONFIDENCE = 0.5;
+// Chặn input phình to không kiểm soát (tên/spec quá dài, danh sách biết quá nhiều dòng)
+// trước khi đưa vào prompt — giữ chi phí/độ trễ ổn định bất kể dữ liệu nguồn.
+const MAX_FIELD_LEN = 300;
+const MAX_SPEC_LEN = 800;
+
+function clamp(s: string, max = MAX_FIELD_LEN): string {
+  const v = (s ?? '').trim();
+  return v.length > max ? `${v.slice(0, max)}…` : v;
+}
 
 /** Ghi nhận provider đã trả lời; các lần gọi song song cùng provider chỉ ghi một lần. */
 function noteProvider(status: AiStatus, provider: string): void {
@@ -63,6 +76,19 @@ export interface AiEnrichment {
   status: AiStatus;
 }
 
+/**
+ * Gợi ý từ bước tìm tương tự (rapidfuzz) chạy trước AI:
+ *  - shortlist khách hàng đã xếp hạng để đưa vào prompt,
+ *  - ứng viên mã hàng theo từng dòng (kết hợp mã + mô tả),
+ *  - các phần đã khớp chắc thì AI bỏ qua cho đỡ tốn thời gian/token.
+ */
+export interface AiFuzzyHints {
+  customerShortlist?: Array<{ name: string; taxCode: string; score: number }>;
+  candidates?: Record<number, Array<{ id: number; code: string; name: string; unit: string }>>;
+  skipCustomer?: boolean;
+  resolvedLineIndexes?: number[];
+}
+
 const CUSTOMER_PROMPT = (input: { name: string; tax: string; known: string }) => `Bạn chuẩn hoá thông tin doanh nghiệp Việt Nam trong một báo giá.
 Tên đọc được: "${input.name || '(không có)'}"
 MST đọc được: "${input.tax || '(không có)'}"
@@ -73,50 +99,90 @@ Nhiệm vụ:
 3. Nếu tên quá mơ hồ, chọn tên gần nhất trong danh sách đã biết nếu có căn cứ.
 
 Trả JSON đúng định dạng, không giải thích:
-{"name":"<tên đầy đủ>","shortName":"<tên viết tắt nếu có>","taxCode":"<10 hoặc 10-3 chữ số hoặc \\"\\">","confidence":<0..1>}
+{"name":"<tên đầy đủ>","taxCode":"<10 hoặc 10-3 chữ số hoặc \\"\\">","confidence":<0..1, mức tin cậy của chính bạn>}
 Danh sách doanh nghiệp đã biết: ${input.known || '(trống)'}`;
 
-interface CustomerAiResponse {
-  name?: string;
-  shortName?: string;
-  taxCode?: string;
-  confidence?: number;
-}
+const customerAiSchema = z.object({
+  name: z.string().max(500).optional(),
+  taxCode: z.string().max(20).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+});
+
+type CustomerAiResponse = z.infer<typeof customerAiSchema>;
 
 async function resolveCustomerAi(
   pq: ParsedQuote,
   status: AiStatus,
+  hints?: AiFuzzyHints,
 ): Promise<CustomerEnrichment | undefined> {
-  const name = (pq.buyer_name ?? '').trim();
+  const name = clamp((pq.buyer_name ?? '').trim());
   const tax = normalizeTaxCode(pq.buyer_tax_code ?? '');
   if (!name && !tax) return undefined;
 
   const db = getDb();
   const all = db.select().from(customers).all();
-  // Ứng viên gần đúng từ TOÀN BỘ danh sách để LLM có mỏ neo, tránh sửa tên thành công ty khác
-  const simple = simplifyCompanyName(name);
-  const normName = normalizeText(name);
-  const shortlist = simple
-    ? all
-        .map((c) => ({
-          c,
-          score: Math.max(
-            tokenScore(simple, simplifyCompanyName(c.name)),
-            normalizeText(c.name) === normName ? 1 : 0,
-          ),
-        }))
-        .filter((s) => s.score >= 0.3)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 20)
-    : [];
-  const known = shortlist.map(({ c }) => `${c.name} | MST ${c.taxCode}`).join('\n');
 
-  const res = await aiCompleteWithProvider(CUSTOMER_PROMPT({ name, tax, known }), Date.now() + AI_BULK_DEADLINE_MS);
+  // MST đủ 10 chữ số là căn cứ duy nhất. Có trong danh mục thì khớp thẳng;
+  // chưa có thì để bước tra cứu MST xử lý — không đoán theo tên gần giống.
+  if (tax.length >= 10) {
+    const local = all.find((c) => normalizeTaxCode(c.taxCode) === tax);
+    if (local) {
+      status.customer = 'khớp theo MST';
+      return {
+        customerMatch: {
+          status: 'matched',
+          customerId: local.id,
+          customer: toCustomerLite(local),
+          method: 'tax_code',
+        },
+      };
+    }
+    status.notes.push(`MST ${tax} chưa có trong danh mục — tra cứu theo MST`);
+    return undefined;
+  }
+
+  // Ứng viên gần đúng từ TOÀN BỘ danh sách để LLM có mỏ neo, tránh sửa tên thành công ty khác.
+  // Ưu tiên shortlist rapidfuzz đã xếp hạng (nếu có) thay vì tự chấm lại.
+  let known = '';
+  if (hints?.customerShortlist?.length) {
+    known = hints.customerShortlist
+      .slice(0, 20)
+      .map((c) => `${c.name} | MST ${c.taxCode}`)
+      .join('\n');
+  } else {
+    const simple = simplifyCompanyName(name);
+    const normName = normalizeText(name);
+    const shortlist = simple
+      ? all
+          .map((c) => ({
+            c,
+            score: Math.max(
+              tokenScore(simple, simplifyCompanyName(c.name)),
+              normalizeText(c.name) === normName ? 1 : 0,
+            ),
+          }))
+          .filter((s) => s.score >= 0.3)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 20)
+      : [];
+    known = shortlist.map(({ c }) => `${c.name} | MST ${c.taxCode}`).join('\n');
+  }
+
+  const res = await aiCompleteWithProvider(
+    CUSTOMER_PROMPT({ name, tax, known }),
+    Date.now() + AI_BULK_DEADLINE_MS,
+    { task: 'customer' },
+  );
   if (!res) return undefined;
   noteProvider(status, res.provider);
-  const raw = res.text;
-  const parsed = extractJson<CustomerAiResponse>(raw);
-  if (!parsed) return undefined;
+  const parsed = extractJson<CustomerAiResponse>(res.text, customerAiSchema);
+  if (!parsed) {
+    logger.debug({ provider: res.provider }, 'AI khách hàng: phản hồi không parse được / sai schema');
+    return undefined;
+  }
+  if (parsed.confidence != null && parsed.confidence < LOW_CONFIDENCE) {
+    status.notes.push(`AI chỉ tin cậy ${Math.round(parsed.confidence * 100)}% về khách hàng này — kiểm tra lại`);
+  }
 
   const candidateName = (parsed.name ?? '').trim();
   const candidateTax = normalizeTaxCode(parsed.taxCode ?? '');
@@ -221,28 +287,31 @@ Nhiệm vụ:
 2. Chọn "productId" là id ứng viên khớp nhất; nếu không ứng viên nào đúng thì để null. KHÔNG bịa id.
 
 Trả JSON, không giải thích:
-{"name":"...","brand":"...","model":"...","desc":"...","productId":<id hoặc null>,"confidence":<0..1>}`;
+{"name":"...","brand":"...","model":"...","desc":"...","productId":<id hoặc null>,"confidence":<0..1, mức tin cậy của chính bạn>}`;
 
-interface LineAiResponse {
-  name?: string;
-  brand?: string;
-  model?: string;
-  desc?: string;
-  productId?: number | null;
-  confidence?: number;
-}
+const lineAiSchema = z.object({
+  name: z.string().max(500).optional(),
+  brand: z.string().max(200).optional(),
+  model: z.string().max(200).optional(),
+  desc: z.string().max(2000).optional(),
+  productId: z.number().int().positive().nullable().optional(),
+  confidence: z.number().min(0).max(1).optional(),
+});
+
+type LineAiResponse = z.infer<typeof lineAiSchema>;
 
 async function suggestLine(
   line: ParsedQuote['lines'][number],
   productMatch: ProductMatch,
   status: AiStatus,
+  preCandidates?: Array<{ id: number; code: string; name: string; unit: string }>,
 ): Promise<LineSuggestion | undefined> {
   // Luôn gọi AI cho từng dòng để kiểm tra lại kết quả ghép tất định —
   // kể cả dòng đã ghép chắc chắn vẫn có thể bị tách tên/model sai.
   const detCandidates = productMatch.candidates ?? [];
 
-  // Ứng viên rộng từ TOÀN BỘ danh mục để LLM có thể chọn mã ngoài top-5 tất định
-  const wide = candidatesForAi(line, 20);
+  // Ưu tiên ứng viên rapidfuzz (kết hợp mã + mô tả); nếu không có mới tự dò.
+  const wide = preCandidates?.length ? preCandidates : candidatesForAi(line, 20);
   const candidates = wide.length
     ? wide
     : detCandidates.map((c) => ({ id: c.id, code: c.code, name: c.name, unit: c.unit }));
@@ -250,21 +319,28 @@ async function suggestLine(
   const res = await aiCompleteWithProvider(
     LINE_PROMPT({
       line: {
-        name: line.name,
-        model: line.model,
-        brand: line.brand,
-        origin: line.origin,
-        spec: line.spec_text,
-        unit: line.unit,
+        name: clamp(line.name),
+        model: clamp(line.model),
+        brand: clamp(line.brand),
+        origin: clamp(line.origin),
+        spec: clamp(line.spec_text, MAX_SPEC_LEN),
+        unit: clamp(line.unit, 50),
       },
       candidates,
     }),
     Date.now() + AI_LINES_DEADLINE_MS,
+    { task: 'line', lineNo: line.line_no },
   );
   if (!res) return undefined;
   noteProvider(status, res.provider);
-  const parsed = extractJson<LineAiResponse>(res.text);
-  if (!parsed) return undefined;
+  const parsed = extractJson<LineAiResponse>(res.text, lineAiSchema);
+  if (!parsed) {
+    logger.debug({ provider: res.provider, lineNo: line.line_no }, 'AI dòng hàng: phản hồi không parse được / sai schema');
+    return undefined;
+  }
+  if (parsed.confidence != null && parsed.confidence < LOW_CONFIDENCE) {
+    status.notes.push(`AI chỉ tin cậy ${Math.round(parsed.confidence * 100)}% về dòng #${line.line_no} — kiểm tra lại`);
+  }
 
   const suggestion: LineSuggestion = {};
   const assign = (key: 'name' | 'brand' | 'model' | 'desc', value?: string) => {
@@ -295,22 +371,30 @@ async function suggestLine(
 export async function enrichWithAi(
   pq: ParsedQuote,
   lineMatches: ProductMatch[],
+  hints?: AiFuzzyHints,
 ): Promise<AiEnrichment | undefined> {
   if (!aiGlobalEnabled()) return undefined;
 
   const status: AiStatus = { ran: false, providers: [], notes: [] };
+  // Dòng đã khớp chắc bằng rapidfuzz thì bỏ qua AI cho nhanh/đỡ tốn token.
+  const skip = new Set(hints?.resolvedLineIndexes ?? []);
+  const items = pq.lines
+    .map((line, i) => ({ line, match: lineMatches[i]!, i }))
+    .filter((it) => !skip.has(it.i));
+
   const [customer, lineResults] = await Promise.all([
-    resolveCustomerAi(pq, status),
-    mapLimit(pq.lines.map((line, i) => ({ line, match: lineMatches[i]! })), Math.max(1, AI_LINE_CONCURRENCY), (item) =>
-      suggestLine(item.line, item.match, status),
+    hints?.skipCustomer ? Promise.resolve<CustomerEnrichment | undefined>(undefined) : resolveCustomerAi(pq, status, hints),
+    mapLimit(items, Math.max(1, AI_LINE_CONCURRENCY), (item) =>
+      suggestLine(item.line, item.match, status, hints?.candidates?.[item.i]),
     ),
   ]);
 
   // AI coi như đã chạy khi có ít nhất một provider trả lời, kể cả không tạo ra gợi ý nào
   status.ran = status.providers.length > 0;
   const lines: Record<number, LineSuggestion> = {};
-  lineResults.forEach((s, i) => {
-    if (s) lines[i] = s;
+  items.forEach((it, k) => {
+    const s = lineResults[k];
+    if (s) lines[it.i] = s;
   });
   if (!status.ran) {
     logger.debug('AI enrichment không có kết quả');

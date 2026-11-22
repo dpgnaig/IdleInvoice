@@ -38,13 +38,14 @@ class PdfTableParser(QuoteParser):
         tr.extract_meta(full_text, pq)
 
         if grids:
-            best = None
+            best = None  # (grid_idx, header_idx, mapping, ambiguous)
             for gi, grid in enumerate(grids):
                 found = tr.find_table_header(grid)
                 if found and (best is None or len(found[1]) > len(best[2])):
-                    best = (gi, found[0], found[1])
+                    best = (gi, found[0], found[1], found[2])
             if best:
-                gi, hi, mapping = best
+                gi, hi, mapping, ambiguous = best
+                tr.apply_header_warnings(pq, ambiguous, grids[gi][hi])
                 pq.lines, totals = tr.grid_lines(grids[gi], hi, mapping)
                 tr.apply_totals(totals, pq)
 

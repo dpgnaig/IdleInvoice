@@ -101,6 +101,19 @@ productsRouter.get(
   }),
 );
 
+/** Toàn bộ hàng hóa rút gọn cho combobox — không phân trang (phải đứng trước /:id). */
+productsRouter.get(
+  '/options',
+  asyncHandler(async (_req, res) => {
+    const rows = getDb()
+      .select({ id: products.id, code: products.code, name: products.name, unit: products.unit })
+      .from(products)
+      .orderBy(asc(products.code))
+      .all();
+    res.json(rows);
+  }),
+);
+
 productsRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {

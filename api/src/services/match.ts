@@ -76,6 +76,11 @@ export function matchCustomer(buyerName: string, buyerTaxCode: string): Customer
     }
   }
 
+  // MST hợp lệ (>= 10 chữ số) mà không có trong danh mục: MST là căn cứ duy nhất.
+  // Không đoán theo tên — tránh gắn nhầm sang một công ty khác cùng tên gần giống;
+  // bước tra cứu MST phía sau sẽ lấy đúng thông tin từ mã số thuế.
+  if (tax.length >= 10) return { status: 'new_customer', customerId: null };
+
   // 2. alias_text theo tên chuẩn hóa
   const norm = normalizeText(buyerName);
   if (norm) {

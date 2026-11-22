@@ -70,3 +70,46 @@ class ErrorResponse(BaseModel):
     error: str
     error_code: str
     message: str
+
+
+# ---------- Tìm tương tự (rapidfuzz) ----------
+
+
+class CustomerCandidate(BaseModel):
+    id: int | None = None
+    name: str = ""
+    taxCode: str = ""
+    score: float = 0.0
+
+
+class MatchCustomersRequest(BaseModel):
+    query: str = ""
+    customers: list[dict] = Field(default_factory=list)
+    limit: int = 20
+    min_score: float = 0.3
+
+
+class MatchCustomersResponse(BaseModel):
+    candidates: list[CustomerCandidate] = Field(default_factory=list)
+
+
+class ProductCandidate(BaseModel):
+    id: int | None = None
+    code: str = ""
+    name: str = ""
+    unit: str = ""
+    score: float = 0.0
+    codeScore: float = 0.0
+    textScore: float = 0.0
+
+
+class MatchProductsRequest(BaseModel):
+    lines: list[dict] = Field(default_factory=list)
+    products: list[dict] = Field(default_factory=list)
+    limit: int = 20
+    min_score: float = 0.3
+
+
+class MatchProductsResponse(BaseModel):
+    # Ứng viên xếp hạng cho từng dòng, giữ đúng thứ tự dòng gửi lên.
+    lines: list[list[ProductCandidate]] = Field(default_factory=list)

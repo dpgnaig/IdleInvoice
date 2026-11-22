@@ -13,7 +13,8 @@ import { logger } from '../lib/logger.js';
 import { normalizeTaxCode } from '../lib/normalize.js';
 import { asyncHandler } from '../middleware/error.js';
 import { parseWithPython, previewWithPython } from '../services/parser-client.js';
-import { enrichWithAi } from '../services/ai-enrich.js';
+import { enrichWithAi, type AiEnrichment, type AiFuzzyHints, type LineSuggestion } from '../services/ai-enrich.js';
+import { fuzzyEnrich, type FuzzyResult } from '../services/fuzzy-enrich.js';
 import { createJob, finishJob, getJob, jobView, updateFile } from '../services/quote-jobs.js';
 import { matchQuote, buildDraft, confirmDraft, lookupDraftCustomer, sha256 } from '../services/quotes.js';
 
@@ -27,7 +28,7 @@ function uploadDir(): string {
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024, files: 10 },
+  limits: { fileSize: 10 * 1024 * 1024, files: 50 },
   fileFilter: (_req, file, cb) => {
     const ok = /\.(pdf|xlsx|xls|docx)$/i.test(file.originalname);
     if (!ok) return cb(new Error('Chỉ chấp nhận file .pdf, .xlsx, .xls, .docx'));
@@ -55,6 +56,21 @@ function storeFile(buffer: Buffer, originalName: string, fileHash: string): stri
   const stored = join(uploadDir(), `${fileHash}.${ext}`);
   if (!existsSync(stored)) writeFileSync(stored, buffer);
   return stored;
+}
+
+/** Gộp kết quả rapidfuzz (nền) với AI (ghi đè); đủ để buildDraft áp vào nháp. */
+function mergeEnrichment(fuzzy?: FuzzyResult, ai?: AiEnrichment): AiEnrichment | undefined {
+  if (!fuzzy && !ai) return undefined;
+  const lines: Record<number, LineSuggestion> = { ...(fuzzy?.lines ?? {}) };
+  for (const [k, s] of Object.entries(ai?.lines ?? {})) {
+    const idx = Number(k);
+    lines[idx] = { ...(lines[idx] ?? {}), ...s };
+  }
+  return {
+    customer: ai?.customer ?? fuzzy?.customer,
+    lines,
+    status: ai?.status ?? { ran: false, providers: [], notes: [] },
+  };
 }
 
 /** Xử lý nền một phiên tải lên: cập nhật tiến trình từng file để UI poll. */
@@ -132,16 +148,27 @@ async function processQuoteFiles(
           .run();
       }
 
-      // Ghép tất định để lấy ứng viên mã hàng, rồi mới hỏi AI (AI chọn trong ứng viên đó)
+      // Ghép tất định trước, rồi tìm tương tự (rapidfuzz), cuối cùng mới tới AI
       updateFile(jobId, i, { stage: 'matching', pct: 35 });
       const base = matchQuote(parsed.data);
-      updateFile(jobId, i, { stage: 'ai', pct: 55 });
-      const ai = await enrichWithAi(parsed.data, base.lines.map((l) => l.productMatch));
+      updateFile(jobId, i, { stage: 'fuzzy', pct: 50 });
+      const fuzzy = await fuzzyEnrich(parsed.data, base.lines.map((l) => l.productMatch));
+      updateFile(jobId, i, { stage: 'ai', pct: 65 });
+      const hints: AiFuzzyHints | undefined = fuzzy
+        ? {
+            customerShortlist: fuzzy.customerShortlist,
+            candidates: fuzzy.candidates,
+            skipCustomer: fuzzy.resolvedCustomer,
+            resolvedLineIndexes: Object.keys(fuzzy.lines).map(Number),
+          }
+        : undefined;
+      const ai = await enrichWithAi(parsed.data, base.lines.map((l) => l.productMatch), hints);
       // Hiện provider đã dùng ngay trên thanh tiến trình, trước khi bước tra MST xong
       if (ai?.status.providers.length) {
         updateFile(jobId, i, { aiProviders: ai.status.providers });
       }
-      const draft = buildDraft(parsed.data, f.originalname, fileHash, ai, base);
+      const enrichment = mergeEnrichment(fuzzy, ai);
+      const draft = buildDraft(parsed.data, f.originalname, fileHash, enrichment, base);
 
       // MST có trong file nhưng chưa có trong DSKH -> tra VietQR (không phụ thuộc AI)
       updateFile(jobId, i, { stage: 'tax_lookup', pct: 80 });
@@ -273,7 +300,7 @@ async function processQuoteFiles(
 
 quotesRouter.post(
   '/parse',
-  upload.array('files', 10),
+  upload.array('files', 50),
   asyncHandler(async (req, res) => {
     const files = (req.files ?? []) as Express.Multer.File[];
     if (!files.length) throw badRequest('Vui lòng chọn ít nhất một file báo giá');
@@ -464,6 +491,18 @@ quotesRouter.get(
   }),
 );
 
+/** Toàn bộ ID báo giá khớp bộ lọc hiện tại — dùng cho "Chọn tất cả" khi xóa theo lô
+ * (phải đứng trước /:id). Bảng chỉ hiện một trang nhưng thao tác hàng loạt không bị giới hạn theo trang. */
+quotesRouter.get(
+  '/ids',
+  asyncHandler(async (req, res) => {
+    const q = listQuery.parse(req.query);
+    const where = q.search ? like(quotes.quoteNo, `%${q.search}%`) : undefined;
+    const rows = getDb().select({ id: quotes.id }).from(quotes).where(where).all();
+    res.json({ ids: rows.map((r) => r.id) });
+  }),
+);
+
 quotesRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
@@ -524,6 +563,39 @@ quotesRouter.delete(
     db.delete(quotes).where(eq(quotes.id, id)).run();
     writeAudit(req.user!.id, 'delete', 'quote', id, { quoteNo: quote.quoteNo });
     res.json({ ok: true });
+  }),
+);
+
+const batchDeleteSchema = z.object({ ids: z.array(z.number().int().positive()).min(1).max(5000) });
+
+/**
+ * Xóa hàng loạt: báo giá có hóa đơn đã xuất bị BỎ QUA (không chặn cả lô như
+ * khi xóa một báo giá), để người dùng chọn "tất cả" vẫn xóa được phần xóa được.
+ */
+quotesRouter.post(
+  '/delete-batch',
+  asyncHandler(async (req, res) => {
+    const { ids } = batchDeleteSchema.parse(req.body);
+    const db = getDb();
+    let deleted = 0;
+    const skipped: Array<{ id: number; quoteNo: string }> = [];
+    for (const id of ids) {
+      const quote = db.select().from(quotes).where(eq(quotes.id, id)).get();
+      if (!quote) continue;
+      const inv = db.select().from(invoices).where(eq(invoices.quoteId, id)).get();
+      if (inv?.status === 'exported') {
+        skipped.push({ id, quoteNo: quote.quoteNo });
+        continue;
+      }
+      if (inv) {
+        db.delete(invoiceLines).where(eq(invoiceLines.invoiceId, inv.id)).run();
+        db.delete(invoices).where(eq(invoices.id, inv.id)).run();
+      }
+      db.delete(quotes).where(eq(quotes.id, id)).run();
+      deleted += 1;
+    }
+    writeAudit(req.user!.id, 'delete', 'quote', ids.join(','), { count: deleted, skipped: skipped.length });
+    res.json({ deleted, skipped });
   }),
 );
 

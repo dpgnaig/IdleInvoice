@@ -9,8 +9,18 @@ from fastapi.responses import JSONResponse
 from .base import QuoteParser
 from .docx_parser import DocxTableParser, read_docx
 from .excel_parser import ExcelTableParser
-from .models import HealthResponse, ParsedQuote, PreviewDoc, PreviewSheet
+from .models import (
+    HealthResponse,
+    MatchCustomersRequest,
+    MatchCustomersResponse,
+    MatchProductsRequest,
+    MatchProductsResponse,
+    ParsedQuote,
+    PreviewDoc,
+    PreviewSheet,
+)
 from .pdf_parser import PdfTableParser
+from . import fuzzy
 from . import table_reader as tr
 
 MAX_FILE_MB = float(os.environ.get("MAX_FILE_MB", "10"))
@@ -36,6 +46,30 @@ def check_internal_key(x_internal_key: str | None = Header(default=None)) -> Non
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse()
+
+
+@app.post("/match/customers", response_model=MatchCustomersResponse)
+def match_customers(
+    req: MatchCustomersRequest,
+    _auth: None = Depends(check_internal_key),
+) -> MatchCustomersResponse:
+    """Xếp hạng tên công ty gần giống bằng rapidfuzz (dùng cho ghép khách hàng)."""
+    candidates = fuzzy.customer_candidates(
+        req.query, req.customers, limit=max(1, min(req.limit, 200)), min_score=req.min_score
+    )
+    return MatchCustomersResponse(candidates=candidates)
+
+
+@app.post("/match/products", response_model=MatchProductsResponse)
+def match_products(
+    req: MatchProductsRequest,
+    _auth: None = Depends(check_internal_key),
+) -> MatchProductsResponse:
+    """Ghép từng dòng báo giá với danh mục, kết hợp mã hàng + mô tả kỹ thuật."""
+    lines = fuzzy.product_candidates(
+        req.lines, req.products, limit=max(1, min(req.limit, 200)), min_score=req.min_score
+    )
+    return MatchProductsResponse(lines=lines)
 
 
 @app.post("/parse")

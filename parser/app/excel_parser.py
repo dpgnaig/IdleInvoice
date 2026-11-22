@@ -22,16 +22,17 @@ class ExcelTableParser(QuoteParser):
         header_text = "\n".join(tr._sheet_text(g) for g in grids[:2])
         tr.extract_meta(header_text, pq)
 
-        best = None  # (grid_idx, header_idx, mapping)
+        best = None  # (grid_idx, header_idx, mapping, ambiguous)
         for gi, grid in enumerate(grids):
             found = tr.find_table_header(grid)
             if found and (best is None or len(found[1]) > len(best[2])):
-                best = (gi, found[0], found[1])
+                best = (gi, found[0], found[1], found[2])
         if best is None:
             pq.warnings.append("Không tìm thấy bảng hàng hóa trong file Excel")
             return tr.finalize(pq)
 
-        gi, hi, mapping = best
+        gi, hi, mapping, ambiguous = best
+        tr.apply_header_warnings(pq, ambiguous, grids[gi][hi])
         lines, totals = tr.grid_lines(grids[gi], hi, mapping)
         pq.lines = lines
         tr.apply_totals(totals, pq)

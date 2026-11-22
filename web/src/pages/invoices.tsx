@@ -9,8 +9,10 @@ import { DataTable, type Column, type SortState } from '@/components/ui/data-tab
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/layout/page-header';
 import { SearchInput, SegmentedControl } from '@/components/ui/toolbar';
+import { SelectionBar } from '@/components/ui/selection-bar';
 import { Pagination } from '@/components/ui/pagination';
 import { useAutoPageSize } from '@/lib/use-auto-page-size';
+import { useDebounced } from '@/lib/use-debounced';
 import { formatDate, formatMoney } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -30,34 +32,33 @@ export default function InvoicesPage() {
   const qc = useQueryClient();
   const [status, setStatus] = useState<'' | 'draft' | 'exported'>('');
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounced(search.trim(), 300);
   const [page, setPage] = useState(1);
   const { ref: tableRef, pageSize } = useAutoPageSize();
   // Số dòng/trang đổi theo kích thước cửa sổ -> quay về trang 1 để không vượt quá số trang
   useEffect(() => setPage(1), [pageSize]);
+  useEffect(() => setPage(1), [debouncedSearch, status]);
   const [selected, setSelected] = useState<Set<number | string>>(new Set());
+  // true = đã chọn TOÀN BỘ hóa đơn khớp bộ lọc hiện tại (không chỉ trang đang xem)
+  const [selectedAllFiltered, setSelectedAllFiltered] = useState(false);
   const [sort, setSort] = useState<SortState | null>({ key: 'createdAt', dir: 'desc' });
 
   const list = useQuery({
-    queryKey: ['invoices', status, page, pageSize],
+    queryKey: ['invoices', status, debouncedSearch, page, pageSize],
     placeholderData: keepPreviousData,
     queryFn: async () => {
       const { data } = await api.get(endpoints.invoices.list, {
-        params: { status: status || undefined, page, pageSize },
+        params: { status: status || undefined, search: debouncedSearch || undefined, page, pageSize },
       });
       return data as { data: InvoiceRow[]; pagination: { page: number; totalPages: number; total: number } };
     },
   });
 
   const rows = useMemo(() => {
-    const filtered = (list.data?.data ?? []).filter(
-      (r) =>
-        !search ||
-        r.customerName.toLowerCase().includes(search.toLowerCase()) ||
-        r.customerTaxCode.includes(search),
-    );
-    if (!sort) return filtered;
+    const data = list.data?.data ?? [];
+    if (!sort) return data;
     const dir = sort.dir === 'asc' ? 1 : -1;
-    return [...filtered].sort((a, b) => {
+    return [...data].sort((a, b) => {
       switch (sort.key) {
         case 'id':
           return (a.id - b.id) * dir;
@@ -72,7 +73,7 @@ export default function InvoicesPage() {
           return a.createdAt.localeCompare(b.createdAt) * dir;
       }
     });
-  }, [list.data?.data, search, sort]);
+  }, [list.data?.data, sort]);
 
   const columns = useMemo<Column<InvoiceRow>[]>(
     () => [
@@ -125,38 +126,55 @@ export default function InvoicesPage() {
       a.click();
       URL.revokeObjectURL(url);
     },
-    onSuccess: () => {
-      toast.success('Đã xuất file Excel');
+    onSuccess: (_void, ids) => {
+      toast.success(`Đã xuất ${ids.length} hóa đơn ra Excel`);
       setSelected(new Set());
+      setSelectedAllFiltered(false);
       void qc.invalidateQueries({ queryKey: ['invoices'] });
     },
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
 
-  const toggle = (k: string | number) =>
+  // "Chọn tất cả" khi đã lọc nhiều hơn 1 trang: lấy ID theo ĐÚNG bộ lọc hiện tại
+  // từ server, không chỉ những dòng đang hiển thị trên trang này.
+  const exportAllIds = useMutation({
+    mutationFn: async () => {
+      const { data } = await api.get<{ ids: number[] }>(endpoints.invoices.ids, {
+        params: { status: status || undefined, search: debouncedSearch || undefined },
+      });
+      return data.ids;
+    },
+    onSuccess: (ids) => void exportExcel.mutateAsync(ids),
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const toggle = (k: string | number) => {
+    setSelectedAllFiltered(false);
     setSelected((s) => {
       const n = new Set(s);
       if (n.has(k)) n.delete(k);
       else n.add(k);
       return n;
     });
+  };
 
-  const idsToExport = Array.from(selected).map(Number);
+  const total = list.data?.pagination.total ?? 0;
+  const pageFullySelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
+  // Mọi dòng trên trang đã chọn nhưng còn trang khác -> gợi ý mở rộng chọn hết bộ lọc
+  const canExpandSelection = pageFullySelected && !selectedAllFiltered && total > rows.length;
+  const selectedCount = selectedAllFiltered ? total : selected.size;
+  const exporting = exportExcel.isPending || exportAllIds.isPending;
+
+  const doExport = () => {
+    if (selectedAllFiltered) void exportAllIds.mutateAsync();
+    else void exportExcel.mutateAsync(Array.from(selected).map(Number));
+  };
 
   return (
     <div>
       <PageHeader
         title="Hóa đơn"
         description="Hóa đơn nháp tạo từ báo giá. Chọn các hóa đơn rồi xuất Excel để import lên phần mềm hóa đơn."
-        actions={
-          <Button
-            disabled={idsToExport.length === 0 || exportExcel.isPending}
-            onClick={() => void exportExcel.mutateAsync(idsToExport)}
-          >
-            {exportExcel.isPending ? <Loader2 className="animate-spin" /> : <Download />}
-            Xuất Excel ({idsToExport.length})
-          </Button>
-        }
       />
 
       <DataTable
@@ -166,7 +184,7 @@ export default function InvoicesPage() {
             <SegmentedControl
               ariaLabel="Lọc trạng thái"
               value={status}
-              onChange={(v) => { setStatus(v); setPage(1); }}
+              onChange={(v) => setStatus(v)}
               options={[
                 { value: '', label: 'Tất cả' },
                 { value: 'draft', label: 'Nháp' },
@@ -179,15 +197,24 @@ export default function InvoicesPage() {
               placeholder="Lọc theo khách hàng, MST…"
               ariaLabel="Lọc hóa đơn theo khách hàng"
             />
-            {selected.size > 0 && (
-              <span className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary/10 px-2.5 text-xs font-medium text-primary">
-                Đã chọn {selected.size}
-                <button type="button" className="underline-offset-2 hover:underline" onClick={() => setSelected(new Set())}>
-                  Bỏ chọn
-                </button>
-              </span>
-            )}
           </>
+        }
+        selectionBar={
+          <SelectionBar
+            count={selectedCount}
+            total={total}
+            unit="hóa đơn"
+            allSelected={selectedAllFiltered}
+            canExpand={canExpandSelection}
+            onExpandAll={() => setSelectedAllFiltered(true)}
+            onClear={() => { setSelected(new Set()); setSelectedAllFiltered(false); }}
+            actions={
+              <Button size="sm" disabled={exporting} onClick={doExport}>
+                {exporting ? <Loader2 className="animate-spin" /> : <Download />}
+                Xuất Excel
+              </Button>
+            }
+          />
         }
         footer={
           <Pagination
@@ -204,11 +231,12 @@ export default function InvoicesPage() {
         fetching={list.isPlaceholderData}
         columns={columns}
         rowKey={(r) => r.id}
-        selected={selected}
+        selected={selectedAllFiltered ? new Set(rows.map((r) => r.id)) : selected}
         onToggle={toggle}
-        onToggleAll={() =>
-          setSelected((s) => (rows.every((r) => s.has(r.id)) ? new Set() : new Set(rows.map((r) => r.id))))
-        }
+        onToggleAll={() => {
+          setSelectedAllFiltered(false);
+          setSelected((s) => (rows.every((r) => s.has(r.id)) ? new Set() : new Set(rows.map((r) => r.id))));
+        }}
         loading={list.isLoading}
         sort={sort}
         onSortChange={setSort}

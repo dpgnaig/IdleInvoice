@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { History, Trash2 } from 'lucide-react';
+import { History, Loader2, Trash2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { endpoints } from '@/lib/endpoints';
 import { DataTable, type Column } from '@/components/ui/data-table';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { SelectionBar } from '@/components/ui/selection-bar';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/layout/page-header';
@@ -31,6 +32,10 @@ export default function QuotesPage() {
   // Số dòng/trang đổi theo kích thước cửa sổ -> quay về trang 1 để không vượt quá số trang
   useEffect(() => setPage(1), [pageSize]);
   const [toDelete, setToDelete] = useState<QuoteRow | null>(null);
+  const [selected, setSelected] = useState<Set<number | string>>(new Set());
+  // true = đã chọn TOÀN BỘ báo giá khớp bộ lọc hiện tại (không chỉ trang đang xem)
+  const [selectedAllFiltered, setSelectedAllFiltered] = useState(false);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const qc = useQueryClient();
   const navigate = useNavigate();
   const list = useQuery({
@@ -42,6 +47,8 @@ export default function QuotesPage() {
     },
   });
 
+  const rows = useMemo(() => list.data?.data ?? [], [list.data?.data]);
+
   const remove = useMutation({
     mutationFn: async (row: QuoteRow) => api.delete(endpoints.quotes.byId(row.id)),
     onSuccess: (_r, row) => {
@@ -52,6 +59,62 @@ export default function QuotesPage() {
     },
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
+
+  const deleteBatch = useMutation({
+    mutationFn: async (ids: number[]) => {
+      const { data } = await api.post<{ deleted: number; skipped: Array<{ id: number; quoteNo: string }> }>(
+        endpoints.quotes.deleteBatch,
+        { ids },
+      );
+      return data;
+    },
+    onSuccess: (res) => {
+      if (res.skipped.length > 0) {
+        toast.warning(`Đã xóa ${res.deleted} báo giá, bỏ qua ${res.skipped.length} báo giá đã xuất hóa đơn`);
+      } else {
+        toast.success(`Đã xóa ${res.deleted} báo giá`);
+      }
+      setBatchDeleteOpen(false);
+      setSelected(new Set());
+      setSelectedAllFiltered(false);
+      void qc.invalidateQueries({ queryKey: ['quotes'] });
+      void qc.invalidateQueries({ queryKey: ['invoices'] });
+    },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  // "Chọn tất cả" khi đã lọc nhiều hơn 1 trang: lấy ID theo ĐÚNG bộ lọc hiện tại
+  // từ server, không chỉ những dòng đang hiển thị trên trang này.
+  const deleteAllIds = useMutation({
+    mutationFn: async () => {
+      const { data } = await api.get<{ ids: number[] }>(endpoints.quotes.ids);
+      return data.ids;
+    },
+    onSuccess: (ids) => void deleteBatch.mutateAsync(ids),
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const toggle = (k: string | number) => {
+    setSelectedAllFiltered(false);
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
+      return n;
+    });
+  };
+
+  const total = list.data?.pagination.total ?? 0;
+  const pageFullySelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
+  const canExpandSelection = pageFullySelected && !selectedAllFiltered && total > rows.length;
+  const selectedCount = selectedAllFiltered ? total : selected.size;
+  const batchDeleting = deleteBatch.isPending || deleteAllIds.isPending;
+
+  const doBatchDelete = () => {
+    if (selectedAllFiltered) void deleteAllIds.mutateAsync();
+    else void deleteBatch.mutateAsync(Array.from(selected).map(Number));
+  };
+
 
   const columns: Column<QuoteRow>[] = [
     { key: 'quoteNo', width: '200px', header: 'Số báo giá', render: (r) => <span className="font-mono text-xs">{r.quoteNo}</span> },
@@ -104,6 +167,28 @@ export default function QuotesPage() {
       <PageHeader title="Lịch sử báo giá" description="Các báo giá đã đọc và lưu trong hệ thống." />
       <DataTable
         cardRef={tableRef}
+        selectionBar={
+          <SelectionBar
+            count={selectedCount}
+            total={total}
+            unit="báo giá"
+            allSelected={selectedAllFiltered}
+            canExpand={canExpandSelection}
+            onExpandAll={() => setSelectedAllFiltered(true)}
+            onClear={() => { setSelected(new Set()); setSelectedAllFiltered(false); }}
+            actions={
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={batchDeleting}
+                onClick={() => setBatchDeleteOpen(true)}
+              >
+                {batchDeleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                Xóa
+              </Button>
+            }
+          />
+        }
         footer={
           <Pagination
             page={page}
@@ -114,11 +199,17 @@ export default function QuotesPage() {
             onChange={setPage}
           />
         }
-        rows={list.data?.data ?? []}
+        rows={rows}
         pageSize={pageSize}
         fetching={list.isPlaceholderData}
         columns={columns}
         rowKey={(r) => r.id}
+        selected={selectedAllFiltered ? new Set(rows.map((r) => r.id)) : selected}
+        onToggle={toggle}
+        onToggleAll={() => {
+          setSelectedAllFiltered(false);
+          setSelected((s) => (rows.every((r) => s.has(r.id)) ? new Set() : new Set(rows.map((r) => r.id))));
+        }}
         loading={list.isLoading}
         onRowClick={(r) => navigate(`/quotes/${r.id}`)}
         empty={
@@ -144,6 +235,16 @@ export default function QuotesPage() {
         onConfirm={() => {
           if (toDelete) remove.mutate(toDelete);
         }}
+      />
+      <ConfirmDialog
+        open={batchDeleteOpen}
+        onOpenChange={setBatchDeleteOpen}
+        title="Xóa các báo giá đã chọn?"
+        description={`${selectedCount} báo giá sẽ bị xóa (báo giá đã xuất hóa đơn sẽ được bỏ qua). Không hoàn tác được.`}
+        confirmLabel="Xóa"
+        destructive
+        loading={batchDeleting}
+        onConfirm={doBatchDelete}
       />
     </div>
   );

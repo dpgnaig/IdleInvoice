@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass, field
 
 from .models import ParsedQuote, QuoteLine
 from . import text_utils as tu
@@ -15,6 +16,10 @@ HEADER_KEYWORDS: dict[str, list[str]] = {
     "line_no": ["tt", "stt", "so tt", "sott"],
     "name": [
         "thong so ky thuat",
+        "thong tin ky thuat",
+        "thong tin thiet bi",
+        "thong tin hang hoa",
+        "thong tin san pham",
         "chung loai",
         "ten hang",
         "ten thiet bi",
@@ -59,49 +64,113 @@ def _cell(cells: list[str], i: int | None) -> str:
     return (cells[i] or "").strip()
 
 
-def score_header(cells: list[str]) -> dict[str, int] | None:
-    """Trả map field -> chỉ số cột nếu dòng này là tiêu đề bảng hàng hóa.
+FIELD_LABELS: dict[str, str] = {
+    "line_no": "STT",
+    "name": "tên hàng",
+    "model": "model",
+    "brand": "hãng",
+    "origin": "xuất xứ",
+    "desc": "mô tả",
+    "unit": "đơn vị tính",
+    "qty": "số lượng",
+    "unit_price": "đơn giá",
+    "amount": "thành tiền",
+}
 
-    Mỗi cột chỉ được gán cho một field (cột "Mô tả" không bị vừa là tên hàng
-    vừa là mô tả). Từ khoá ngắn trong ``EXACT_ONLY`` chỉ khớp nguyên ô.
+
+@dataclass
+class HeaderMatch:
+    """Kết quả dò tiêu đề: map field -> cột, kèm các cột cũng khớp (mơ hồ)."""
+
+    mapping: dict[str, int]
+    # field -> các cột khác cũng khớp từ khoá (kể cả cột đã chọn ở vị trí đầu)
+    ambiguous: dict[str, list[int]] = field(default_factory=dict)
+
+
+def score_header_detail(cells: list[str]) -> HeaderMatch | None:
+    """Như ``score_header`` nhưng kèm danh sách cột trùng từ khoá.
+
+    Nhiều cột cùng khớp một field (vd "Đơn giá trước CK" và "Đơn giá sau CK")
+    là nguồn gây đọc sai giá lớn nhất — phần cảnh báo dùng ``ambiguous`` để báo
+    cho người dùng biết code đã chọn cột nào.
     """
     keys = [tu.norm(c) for c in cells]
     mapping: dict[str, int] = {}
+    ambiguous: dict[str, list[int]] = {}
     used: set[int] = set()
-    for field, words in HEADER_KEYWORDS.items():
-        exact = EXACT_ONLY.get(field, set())
-        for i, k in enumerate(keys):
-            if not k or i in used:
-                continue
-            if any(k == w for w in words):
-                mapping[field] = i
-                used.add(i)
-                break
-        if field in mapping:
+    for fld, words in HEADER_KEYWORDS.items():
+        exact = EXACT_ONLY.get(fld, set())
+        # Ưu tiên khớp nguyên ô, sau đó tới khớp chứa (từ khoá dài >= 4 ký tự).
+        # Vẫn giữ thứ tự này khi chọn cột, nhưng gom cả hai loại để báo mơ hồ.
+        exact_hits = [i for i, k in enumerate(keys) if k and any(k == w for w in words)]
+        sub_hits = [
+            i
+            for i, k in enumerate(keys)
+            if k
+            and i not in exact_hits
+            and any(len(w) >= 4 and w not in exact and w in k for w in words)
+        ]
+        cands = [i for i in exact_hits + sub_hits if i not in used]
+        if not cands:
             continue
-        for i, k in enumerate(keys):
-            if not k or i in used:
-                continue
-            if any(len(w) >= 4 and w not in exact and w in k for w in words):
-                mapping[field] = i
-                used.add(i)
-                break
+        mapping[fld] = cands[0]
+        used.add(cands[0])
+        if len(cands) > 1:
+            ambiguous[fld] = cands
     if "name" not in mapping:
         return None
-    numeric_cols = {"qty", "unit_price", "amount"} & set(mapping)
-    if not numeric_cols:
+    if not {"qty", "unit_price", "amount"} & set(mapping):
         return None
-    # Tiêu đề phải có tín hiệu ở ít nhất 2 trong 3 cột số
-    return mapping
+    return HeaderMatch(mapping, ambiguous)
 
 
-def find_table_header(grid: list[list[str]], max_scan: int = 40) -> tuple[int, dict[str, int]] | None:
-    best: tuple[int, dict[str, int]] | None = None
+def score_header(cells: list[str]) -> dict[str, int] | None:
+    """Trả map field -> chỉ số cột nếu dòng này là tiêu đề bảng hàng hóa."""
+    hm = score_header_detail(cells)
+    return hm.mapping if hm else None
+
+
+def find_table_header(grid: list[list[str]], max_scan: int = 40) -> tuple[int, dict[str, int], dict[str, list[int]]] | None:
+    """Dò dòng tiêu đề. Trả (chỉ số dòng tiêu đề cuối, mapping, ambiguous).
+
+    Quét từng dòng trước; chỉ khi không dòng nào là tiêu đề mới thử ghép 2 dòng
+    liền kề (tiêu đề 2 tầng: dòng nhóm + dòng "SL/Đơn giá/Thành tiền"). Giữ
+    hành vi cũ cho file đã có tiêu đề 1 dòng để không phá kết quả hồi quy.
+    """
+    best: tuple[int, dict[str, int], dict[str, list[int]]] | None = None
     for i, row in enumerate(grid[:max_scan]):
-        m = score_header(row)
-        if m and (best is None or len(m) > len(best[1])):
-            best = (i, m)
+        hm = score_header_detail(row)
+        if hm and (best is None or len(hm.mapping) > len(best[1])):
+            best = (i, hm.mapping, hm.ambiguous)
+    if best is not None:
+        return best
+
+    limit = min(max_scan, len(grid) - 1)
+    for i in range(max(0, limit)):
+        r1, r2 = grid[i], grid[i + 1]
+        width = max(len(r1), len(r2))
+        r1 = r1 + [""] * (width - len(r1))
+        r2 = r2 + [""] * (width - len(r2))
+        combined = [f"{a} {b}".strip() for a, b in zip(r1, r2)]
+        hm = score_header_detail(combined)
+        if hm and (best is None or len(hm.mapping) > len(best[1])):
+            # body bắt đầu sau dòng thứ hai của tiêu đề
+            best = (i + 1, hm.mapping, hm.ambiguous)
     return best
+
+
+def apply_header_warnings(
+    pq: ParsedQuote, ambiguous: dict[str, list[int]], header_row: list[str]
+) -> None:
+    """Cảnh báo khi có nhiều cột cùng khớp một field (đã chọn cột đầu tiên)."""
+    for fld, idxs in ambiguous.items():
+        names = [(header_row[i] if i < len(header_row) else "").strip() for i in idxs]
+        shown = ", ".join(n for n in names if n)
+        label = FIELD_LABELS.get(fld, fld)
+        if shown:
+            pq.warnings.append(
+                f"Nhiều cột cùng khớp '{label}': {shown} — đã chọn cột đầu tiên, kiểm tra lại giá"
+            )
 
 
 def grid_lines(grid: list[list[str]], header_idx: int, mapping: dict[str, int]) -> tuple[list[QuoteLine], list[tuple[str, int]]]:
@@ -193,14 +262,39 @@ def grid_lines(grid: list[list[str]], header_idx: int, mapping: dict[str, int]) 
 
 
 def apply_totals(totals: list[tuple[str, int]], pq: ParsedQuote) -> None:
-    """Ghi tổng khai báo; dòng ghi trước được ưu tiên (dòng 'đã bao gồm VAT 8%' phía sau bị bỏ qua)."""
-    for kind, value in totals:
-        if kind == "vat" and pq.declared_vat is None:
-            pq.declared_vat = value
-        elif kind == "total" and pq.declared_total is None:
-            pq.declared_total = value
-        elif kind == "subtotal" and pq.declared_subtotal is None:
-            pq.declared_subtotal = value
+    """Ghi tổng khai báo, đối chiếu bằng số học thay vì tin nhãn.
+
+    Báo giá đặt tên dòng tổng rất khác nhau ("TỔNG", "THÀNH TIỀN", "THÀNH TIỀN
+    SAU VAT", "TỔNG CỘNG"…). Thay vì tin nhãn, gom mọi con số dòng tổng rồi suy
+    ra: số nhỏ nhất là tạm tính, số lớn nhất là tổng sau VAT. Nhờ vậy
+    "THÀNH TIỀN" (2,8tr, trước VAT) không còn bị nhầm là tổng thanh toán khi
+    ngay dưới có "THÀNH TIỀN SAU VAT" (3,024tr).
+    """
+    vat = next((v for k, v in totals if k == "vat"), None)
+    if vat is not None and pq.declared_vat is None:
+        pq.declared_vat = vat
+
+    money = sorted({v for k, v in totals if k in ("subtotal", "total") and v})
+    if money:
+        if len(money) >= 2:
+            pq.declared_subtotal = money[0]
+            pq.declared_total = money[-1]
+        else:
+            m = money[0]
+            # Một con số duy nhất + có dòng VAT: hoặc là tổng sau VAT, hoặc là
+            # tạm tính. Chọn cách hiểu có tạm tính gần tổng dòng nhất.
+            line_sum = round(sum((l.qty or 0) * (l.unit_price or 0) for l in pq.lines))
+            if pq.declared_vat and m > pq.declared_vat:
+                after = (m - pq.declared_vat, m)      # M là tổng sau VAT
+                before = (m, m + pq.declared_vat)     # M là tạm tính
+                if line_sum and abs(before[0] - line_sum) < abs(after[0] - line_sum):
+                    pq.declared_subtotal, pq.declared_total = before
+                else:
+                    pq.declared_subtotal, pq.declared_total = after
+            else:
+                pq.declared_subtotal = pq.declared_total = m
+
+    # Bù chéo khi thiếu hẳn một con số
     if pq.declared_subtotal is None and pq.declared_total is not None and pq.declared_vat is not None:
         pq.declared_subtotal = pq.declared_total - pq.declared_vat
     if pq.declared_vat is None and pq.declared_total and pq.declared_subtotal:
@@ -231,12 +325,42 @@ def _read_xlsx(data: bytes) -> list[tuple[str, list[list[str]]]]:
 
     from openpyxl import load_workbook
 
-    wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+    # read_only=False để có merged_cells (read-only không lấp được ô merge).
+    wb = load_workbook(io.BytesIO(data), data_only=True)
     out: list[tuple[str, list[list[str]]]] = []
     for ws in wb.worksheets:
+        rows, cols = ws.max_row or 0, ws.max_column or 0
+        if rows > 5000 or cols > 80:
+            # File lớn bất thường: đọc nhanh, bỏ qua lấp ô merge
+            grid = []
+            for row in ws.iter_rows(values_only=True):
+                vals = [_norm_cell(v) for v in row]
+                if any(vals):
+                    grid.append(vals)
+            if grid:
+                out.append((ws.title or "Sheet", grid))
+            continue
+
+        # Chỉ lấp merge DỌC (vd tên nhóm hàng merge qua nhiều dòng). Merge
+        # ngang thường chỉ để trình bày, lấp ra sẽ nhân đôi từ khoá tiêu đề.
+        fill: dict[tuple[int, int], object] = {}
+        for rng in ws.merged_cells.ranges:
+            if rng.min_col != rng.max_col:
+                continue
+            anchor = ws.cell(row=rng.min_row, column=rng.min_col).value
+            if anchor is None or str(anchor).strip() == "":
+                continue
+            for r in range(rng.min_row + 1, rng.max_row + 1):
+                fill[(r, rng.min_col)] = anchor
+
         grid: list[list[str]] = []
-        for row in ws.iter_rows(values_only=True):
-            vals = [_norm_cell(v) for v in row]
+        for ridx, row in enumerate(ws.iter_rows(min_row=1, max_row=rows, max_col=cols), start=1):
+            vals = []
+            for cidx, cell in enumerate(row, start=1):
+                v = cell.value
+                if v is None and (ridx, cidx) in fill:
+                    v = fill[(ridx, cidx)]
+                vals.append(_norm_cell(v))
             if any(vals):
                 grid.append(vals)
         if grid:
@@ -250,9 +374,25 @@ def _read_xls(data: bytes) -> list[tuple[str, list[list[str]]]]:
     wb = xlrd.open_workbook(file_contents=data)
     out: list[tuple[str, list[list[str]]]] = []
     for ws in wb.sheets():
+        # (rlo, rhi, clo, chi) — lấp merge dọc như bản xlsx
+        fill: dict[tuple[int, int], object] = {}
+        for rlo, rhi, clo, chi in getattr(ws, "merged_cells", []) or []:
+            if clo != chi - 1:
+                continue
+            anchor = ws.cell_value(rlo, clo)
+            if anchor is None or str(anchor).strip() == "":
+                continue
+            for r in range(rlo + 1, rhi):
+                fill[(r, clo)] = anchor
+
         grid: list[list[str]] = []
         for r in range(ws.nrows):
-            row = [_norm_cell(ws.cell_value(r, c)) for c in range(ws.ncols)]
+            row = []
+            for c in range(ws.ncols):
+                v = ws.cell_value(r, c)
+                if (v is None or v == "") and (r, c) in fill:
+                    v = fill[(r, c)]
+                row.append(_norm_cell(v))
             if any(row):
                 grid.append(row)
         if grid:
@@ -480,9 +620,50 @@ def _dedupe_lines(lines: list[QuoteLine]) -> list[QuoteLine]:
     return out
 
 
+def _reconcile_line(l: QuoteLine, pq: ParsedQuote) -> None:
+    """Đối chiếu SL × đơn giá với thành tiền; bù field thiếu; cảnh báo khi lệch.
+
+    Sai cột giá (đọc nhầm cột "đơn giá" hay tự động nhân SL) là lỗi hay gặp
+    nhất ở báo giá nhiều cột. Thay vì im lặng, dòng lệch được hạ confidence và
+    báo kèm đơn giá suy ra để người dùng đối chiếu.
+    """
+    q, p, a = l.qty, l.unit_price, l.amount
+    has_q = q is not None and q > 0
+    has_p = p is not None and p > 0
+    has_a = a is not None and a > 0
+
+    if has_q and has_p and has_a:
+        expected = round(q * p)
+        if abs(expected - a) > max(1, a * 0.02):
+            l.confidence = "low"
+            pq.warnings.append(
+                f"Dòng #{l.line_no} \"{l.name[:30]}\": SL×đơn giá ({expected:,.0f}) "
+                f"lệch thành tiền ({a:,.0f}); đơn giá đúng có thể là {round(a / q):,.0f} — kiểm tra lại"
+            )
+        # Khớp thì giữ nguyên confidence gốc: dòng đọc từ text-fallback vốn
+        # kém tin cậy hơn bảng có đường kẻ, không tự nâng lên "high".
+        return
+
+    # Thiếu 1 field -> suy ra bằng phép tính thay vì để trống
+    if has_q and has_a and not has_p:
+        l.unit_price = round(a / q)
+        if l.confidence != "low":
+            l.confidence = "medium"
+    elif has_q and has_p and not has_a:
+        l.amount = round(q * p)
+        if l.confidence != "low":
+            l.confidence = "medium"
+    elif has_a and has_p and not has_q:
+        l.qty = round(a / p, 4)
+        if l.confidence != "low":
+            l.confidence = "medium"
+
+
 def finalize(pq: ParsedQuote) -> ParsedQuote:
     """Tính thuế suất, kiểm tra lệch tổng, sinh cảnh báo."""
     pq.lines = _dedupe_lines(pq.lines)
+    for l in pq.lines:
+        _reconcile_line(l, pq)
 
     # Đọc nhầm "%" thành số tiền (vd "VAT 10% 5,657,000" -> VAT = 10):
     # VAT khai báo là bội số của thuế suất trên tổng trước thuế, không phải

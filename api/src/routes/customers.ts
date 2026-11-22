@@ -69,6 +69,19 @@ customersRouter.get(
   }),
 );
 
+/** Toàn bộ khách hàng rút gọn cho combobox — không phân trang (phải đứng trước /:id). */
+customersRouter.get(
+  '/options',
+  asyncHandler(async (_req, res) => {
+    const rows = getDb()
+      .select({ id: customers.id, name: customers.name, taxCode: customers.taxCode })
+      .from(customers)
+      .orderBy(asc(customers.name))
+      .all();
+    res.json(rows);
+  }),
+);
+
 customersRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {

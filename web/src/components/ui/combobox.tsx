@@ -8,7 +8,51 @@ export interface ComboOption {
   value: string;
   label: string;
   hint?: string;
+  /** Mã hàng/định danh chính xác — dùng để xếp khớp mã lên trước khớp mờ. */
+  code?: string;
+  /** Chuỗi phụ để lọc (mã hàng, MST, tên không dấu…). Mặc định dùng label + hint. */
+  keywords?: string;
 }
+
+/** Khóa tìm kiếm: bỏ dấu tiếng Việt, viết thường, bỏ ký tự không phải chữ/số. */
+function searchKey(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Hạng khớp của một mục (số nhỏ = khớp hơn, -1 = không khớp).
+ * Mã hàng được so NGUYÊN VĂN trước ("HD-270" không bị trộn với "HD270"),
+ * chỉ khi không khớp nguyên văn mới rơi xuống so bỏ dấu/không gạch nối.
+ */
+function matchRank(o: ComboOption, qRaw: string, qKey: string): number {
+  const label = o.label.toLowerCase();
+  const hint = (o.hint ?? '').toLowerCase();
+  if (o.code) {
+    const code = o.code.toLowerCase().trim();
+    if (code === qRaw) return 0;
+    if (code.startsWith(qRaw)) return 1;
+    if (code.includes(qRaw)) return 2;
+    if (qKey) {
+      const codeKey = searchKey(code);
+      if (codeKey === qKey) return 3;
+      if (codeKey.includes(qKey)) return 4;
+    }
+  }
+  if (label.includes(qRaw) || hint.includes(qRaw)) return 5;
+  if (qKey && searchKey(o.keywords ?? `${label} ${hint} ${o.value}`).includes(qKey)) return 6;
+  return -1;
+}
+
+/** Chiều cao cố định của mỗi dòng — cần cho cuộn ảo (windowed rendering). */
+const ITEM_H = 44;
+const OVERSCAN = 6;
+/** Chiều cao vùng nhìn của danh sách (khớp maxHeight 256px + đệm). */
+const VIEW_H = 280;
 
 /**
  * Combobox có tìm kiếm, điều khiển bằng bàn phím (↑ ↓ Enter Esc).
@@ -47,6 +91,7 @@ export function Combobox({
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
   const [active, setActive] = React.useState(0);
+  const [scrollTop, setScrollTop] = React.useState(0);
   const [rect, setRect] = React.useState<DOMRect | null>(null);
   const btnRef = React.useRef<HTMLButtonElement>(null);
   const listRef = React.useRef<HTMLUListElement>(null);
@@ -56,11 +101,16 @@ export function Combobox({
 
   const filtered = React.useMemo(() => {
     if (onSearch) return options; // lọc phía server
-    const q = query.trim().toLowerCase();
-    if (!q) return options;
-    return options.filter(
-      (o) => o.label.toLowerCase().includes(q) || (o.hint ?? '').toLowerCase().includes(q),
-    );
+    const qRaw = query.trim().toLowerCase();
+    if (!qRaw) return options;
+    const qKey = searchKey(qRaw);
+    const ranked: Array<{ o: ComboOption; rank: number }> = [];
+    for (const o of options) {
+      const rank = matchRank(o, qRaw, qKey);
+      if (rank >= 0) ranked.push({ o, rank });
+    }
+    ranked.sort((a, b) => a.rank - b.rank); // stable: giữ thứ tự gốc trong cùng hạng
+    return ranked.map((r) => r.o);
   }, [options, query, onSearch]);
 
   // Cho phép chọn luôn giá trị tự gõ khi không trùng mục nào (mặc định không bật)
@@ -70,6 +120,11 @@ export function Combobox({
     if (options.some((o) => o.value === q || o.label === q)) return filtered;
     return [{ value: q, label: q, hint: customHint }, ...filtered];
   }, [allowCustom, customHint, filtered, options, query]);
+
+  // Cửa sổ render: chỉ dựng các dòng đang nằm trong vùng nhìn (+ đệm)
+  const start = Math.max(0, Math.floor(scrollTop / ITEM_H) - OVERSCAN);
+  const end = Math.min(shown.length, Math.ceil((scrollTop + VIEW_H) / ITEM_H) + OVERSCAN);
+  const visible = shown.slice(start, end);
 
   React.useEffect(() => {
     if (!open) return;
@@ -95,13 +150,43 @@ export function Combobox({
     };
   }, [open]);
 
-  // Dùng phím ↑↓ thì cuộn mục đang chọn vào vùng nhìn thấy
+  // Dùng phím ↑↓ thì cuộn mục đang chọn vào vùng nhìn thấy (danh sách chỉ render một cửa sổ)
   React.useEffect(() => {
     if (!open) return;
-    listRef.current
-      ?.querySelector<HTMLElement>(`[data-index="${active}"]`)
-      ?.scrollIntoView({ block: 'nearest' });
+    const el = listRef.current;
+    if (!el) return;
+    const top = active * ITEM_H;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (top + ITEM_H > el.scrollTop + el.clientHeight) {
+      el.scrollTop = top + ITEM_H - el.clientHeight;
+    }
   }, [active, open]);
+
+  // Vừa mở: nhảy tới đúng vị trí mục đang chọn (giữa danh sách) thay vì luôn từ đầu
+  const jumpedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!open) {
+      jumpedRef.current = false;
+      return;
+    }
+    const el = listRef.current;
+    if (!el || jumpedRef.current) return;
+    jumpedRef.current = true;
+    const idx = shown.findIndex((o) => o.value === value);
+    if (idx <= 0) return;
+    setActive(idx);
+    const nextTop = Math.max(0, idx * ITEM_H - ITEM_H * 3);
+    el.scrollTop = nextTop;
+    setScrollTop(nextTop);
+  }, [open, rect, shown, value]);
+
+  // Đổi từ khóa thì quay về đầu danh sách
+  React.useEffect(() => {
+    if (!open) return;
+    jumpedRef.current = true; // đã gõ tìm kiếm: không nhảy về mục đang chọn nữa
+    setScrollTop(0);
+    if (listRef.current) listRef.current.scrollTop = 0;
+  }, [query]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -216,6 +301,7 @@ export function Combobox({
                 // overscroll-contain: cuộn tới cuối danh sách không kéo theo cả trang
                 className="overflow-y-auto overscroll-contain p-1"
                 style={{ maxHeight: listMax }}
+                onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
               >
                 {loading && (
                   <li className="px-2 py-1.5 text-sm text-muted-foreground">Đang tải…</li>
@@ -223,27 +309,42 @@ export function Combobox({
                 {!loading && shown.length === 0 && (
                   <li className="px-2 py-6 text-center text-sm text-muted-foreground">{emptyText}</li>
                 )}
-                {shown.map((o, i) => (
-                  <li key={o.value} role="option" aria-selected={o.value === value} data-index={i}>
-                    <button
-                      type="button"
-                      onMouseEnter={() => setActive(i)}
-                      onClick={() => choose(o)}
-                      className={cn(
-                        'flex w-full items-start justify-between gap-3 rounded-sm px-2 py-1.5 text-left text-sm',
-                        i === active && 'bg-accent text-accent-foreground',
-                      )}
+                {!loading && start > 0 && (
+                  <li aria-hidden style={{ height: start * ITEM_H }} />
+                )}
+                {!loading && visible.map((o, j) => {
+                  const i = start + j;
+                  return (
+                    <li
+                      key={o.value}
+                      role="option"
+                      aria-selected={o.value === value}
+                      data-index={i}
+                      className="h-11"
                     >
-                      <span className="min-w-0">
-                        <span className="block truncate">{o.label}</span>
-                        {o.hint && (
-                          <span className="block truncate text-xs text-muted-foreground">{o.hint}</span>
+                      <button
+                        type="button"
+                        onMouseEnter={() => setActive(i)}
+                        onClick={() => choose(o)}
+                        className={cn(
+                          'flex h-full w-full items-center justify-between gap-3 rounded-sm px-2 text-left text-sm',
+                          i === active && 'bg-accent text-accent-foreground',
                         )}
-                      </span>
-                      {o.value === value && <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" />}
-                    </button>
-                  </li>
-                ))}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate leading-5">{o.label}</span>
+                          {o.hint && (
+                            <span className="block truncate text-xs leading-4 text-muted-foreground">{o.hint}</span>
+                          )}
+                        </span>
+                        {o.value === value && <Check className="h-4 w-4 shrink-0 text-primary" />}
+                      </button>
+                    </li>
+                  );
+                })}
+                {!loading && end < shown.length && (
+                  <li aria-hidden style={{ height: (shown.length - end) * ITEM_H }} />
+                )}
               </ul>
             </motion.div>
             );

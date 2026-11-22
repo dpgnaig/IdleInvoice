@@ -281,6 +281,24 @@ describe('invoices + export Excel', () => {
     expect(res.body.vat).toBeCloseTo(309_600, 5);
   });
 
+  it('/invoices/ids trả toàn bộ ID khớp bộ lọc, không bị giới hạn theo trang (xuất Excel "chọn tất cả")', async () => {
+    const res = await request(app)
+      .get('/api/invoices/ids')
+      .query({ pageSize: 1, search: 'NGUYÊN PHÁT' })
+      .set('Authorization', `Bearer ${accessToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.ids).toEqual(expect.arrayContaining([invoiceId, invoice2Id]));
+  });
+
+  it('/invoices?search lọc theo tên/MST khách hàng trên toàn bộ dữ liệu (không chỉ trang hiện tại)', async () => {
+    const res = await request(app)
+      .get('/api/invoices')
+      .query({ search: '0110717304', pageSize: 1 })
+      .set('Authorization', `Bearer ${accessToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.pagination.total).toBeGreaterThanOrEqual(2);
+  });
+
   it('chặn xóa khách hàng đang có hóa đơn (409)', async () => {
     const res = await request(app)
       .delete(`/api/customers/${customerId}`)
@@ -630,6 +648,22 @@ describe('ghép tên công ty + ứng viên cho AI', () => {
     expect(r.customer?.taxCode).toBe('0399999999');
   });
 
+  it('MST hợp lệ chưa có trong danh mục -> KHÔNG đoán theo tên (để tra cứu theo MST)', async () => {
+    const { matchCustomer } = await import('../services/match.js');
+    const r = matchCustomer('CTY TM QUANG MINH', '0107654321');
+    expect(r.status).toBe('new_customer');
+    expect(r.customerId).toBeNull();
+    expect(r.customer).toBeUndefined();
+  });
+
+  it('MST trong file khớp danh mục -> matched theo MST dù tên khác', async () => {
+    const { matchCustomer } = await import('../services/match.js');
+    const r = matchCustomer('MỘT CÔNG TY HOÀN TOÀN KHÁC', '0399999999');
+    expect(r.status).toBe('matched');
+    expect(r.customer?.taxCode).toBe('0399999999');
+    expect(r.method).toBe('tax_code');
+  });
+
   it('AI trả candidate không ghi đè khách đã ghép chắc chắn', async () => {
     const { buildDraft } = await import('../services/quotes.js');
     const parsed = {
@@ -821,5 +855,91 @@ describe('bổ sung bằng AI (chuỗi dự phòng + trộn kết quả)', () =>
     const { enrichWithAi } = await import('../services/ai-enrich.js');
     const pq = { buyer_name: '', buyer_tax_code: '', quote_no: '', quote_date: '', lines: [], declared_subtotal: null, declared_vat: null, declared_total: null, tax_rate: null, payment_terms: '', validity_days: null, warnings: [] };
     await expect(enrichWithAi(pq as never, [])).resolves.toBeUndefined();
+  });
+
+  it('lỗi 401 (key sai) mở cầu dao lâu hơn lỗi 503 tạm thời', async () => {
+    insertProvider('openai', 'a', { baseUrl: 'https://llm.local/v1' });
+    process.env.AI_ATTEMPT_TIMEOUT_MS = '800';
+    const { aiComplete, __aiInternals } = await import('../services/ai.js');
+    __aiInternals.breakers.clear();
+
+    vi.stubGlobal('fetch', async () => new Response('unauthorized', { status: 401 }));
+    try {
+      await expect(aiComplete('x', Date.now() + 3000)).resolves.toBeNull();
+      const breaker = __aiInternals.breakers.get('openai/a');
+      expect(breaker?.permanent).toBe(true);
+      expect(breaker!.openUntil - Date.now()).toBeGreaterThan(__aiInternals.transientCooldownMs());
+    } finally {
+      vi.unstubAllGlobals();
+      __aiInternals.breakers.clear();
+    }
+  });
+
+  it('lỗi 503 (tạm thời) mở cầu dao ngắn, không bị coi là lỗi cấu hình', async () => {
+    insertProvider('openai', 'a', { baseUrl: 'https://llm.local/v1' });
+    process.env.AI_ATTEMPT_TIMEOUT_MS = '800';
+    const { aiComplete, __aiInternals } = await import('../services/ai.js');
+    __aiInternals.breakers.clear();
+
+    vi.stubGlobal('fetch', async () => new Response('down', { status: 503 }));
+    try {
+      await expect(aiComplete('x', Date.now() + 3000)).resolves.toBeNull();
+      const breaker = __aiInternals.breakers.get('openai/a');
+      expect(breaker?.permanent).toBe(false);
+      expect(breaker!.openUntil - Date.now()).toBeLessThanOrEqual(__aiInternals.transientCooldownMs());
+    } finally {
+      vi.unstubAllGlobals();
+      __aiInternals.breakers.clear();
+    }
+  });
+
+  it('extractJson bỏ qua object JSON không khớp schema, chọn candidate hợp lệ khác', async () => {
+    const { extractJson } = await import('../services/ai.js');
+    const { z } = await import('zod');
+    const schema = z.object({ productId: z.number().nullable().optional(), name: z.string().optional() });
+    const raw = 'Đây là lý do: {"note":"không liên quan"} Kết quả: {"name":"Đĩa","productId":5}';
+    expect(extractJson(raw, schema)).toEqual({ name: 'Đĩa', productId: 5 });
+  });
+
+  it('extractJson trả null khi JSON hỏng cú pháp', async () => {
+    const { extractJson } = await import('../services/ai.js');
+    expect(extractJson('không phải JSON {abc')).toBeNull();
+  });
+
+  it('AI báo confidence thấp -> ghi cảnh báo "kiểm tra lại"', async () => {
+    insertProvider('openai', 'm', { baseUrl: 'https://llm.local/v1' });
+    process.env.AI_ATTEMPT_TIMEOUT_MS = '800';
+    const { enrichWithAi } = await import('../services/ai-enrich.js');
+    const { __aiInternals } = await import('../services/ai.js');
+    __aiInternals.breakers.clear();
+
+    vi.stubGlobal('fetch', async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '{"name":"Đĩa phân phối khí","model":"HD-270","productId":1,"confidence":0.2}' } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const pq = {
+      buyer_name: '', buyer_tax_code: '', quote_no: '', quote_date: '',
+      lines: [{
+        line_no: 1, name: 'ĐĨA PHÂN PHỐI KHÍ TINH\nMODEL: HD-270', unit: 'Cái',
+        qty: 1, unit_price: 1000, amount: 1000,
+        model: 'HD-270', brand: '', origin: '', spec_text: '', confidence: 'high' as const,
+      }],
+      declared_subtotal: null, declared_vat: null, declared_total: null,
+      tax_rate: 0.08, payment_terms: '', validity_days: null, warnings: [],
+    };
+    const match = { status: 'matched' as const, productId: 1, product: { id: 1, code: 'HD-270', name: 'Đĩa', unit: 'Cái' }, method: 'model_exact' };
+
+    try {
+      const ai = await enrichWithAi(pq as never, [match as never]);
+      expect(ai!.status.notes.some((n) => n.includes('kiểm tra lại'))).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      __aiInternals.breakers.clear();
+    }
   });
 });

@@ -304,4 +304,57 @@ describe('cấu hình AI Agent', () => {
     });
     expect(bad.status).toBe(400);
   });
+
+  it('api_key được mã hóa tại rest trong SQLite, giải mã đúng khi gọi provider', async () => {
+    process.env.AI_ATTEMPT_TIMEOUT_MS = '2000';
+    const created = await asAdmin(request(app).post('/api/admin/ai-providers')).send({
+      name: 'Rest-test',
+      kind: 'openai',
+      baseUrl: 'https://rest-test.local/v1',
+      model: 'm',
+      apiKey: 'plain-secret-key-xyz',
+    });
+    expect(created.status).toBe(201);
+
+    const row = raw.prepare('SELECT api_key FROM ai_providers WHERE id = ?').get(created.body.data.id) as {
+      api_key: string;
+    };
+    expect(row.api_key).not.toBe('plain-secret-key-xyz');
+    expect(row.api_key.startsWith('enc:v1:')).toBe(true);
+
+    let seenAuth = '';
+    vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
+      seenAuth = (init.headers as Record<string, string>).Authorization ?? '';
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    const { aiComplete, __aiInternals } = await import('../services/ai.js');
+    __aiInternals.breakers.clear();
+    await aiComplete('x', Date.now() + 5000);
+    expect(seenAuth).toBe('Bearer plain-secret-key-xyz');
+    __aiInternals.breakers.clear();
+  });
+
+  it('dữ liệu api_key plaintext cũ (trước khi có mã hóa) vẫn đọc được và tự nâng cấp', async () => {
+    const now = new Date().toISOString();
+    const info = raw
+      .prepare(
+        `INSERT INTO ai_providers (created_at, updated_at, name, kind, base_url, api_key, model, enabled, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(now, now, 'Legacy', 'openai', '', 'legacy-plain-key', 'm', 1, 0);
+    const id = Number(info.lastInsertRowid);
+
+    const { getProviderRow } = await import('../services/ai-providers.js');
+    const row = getProviderRow(id);
+    expect(row?.apiKey).toBe('legacy-plain-key');
+
+    const dbRow = raw.prepare('SELECT api_key FROM ai_providers WHERE id = ?').get(id) as { api_key: string };
+    expect(dbRow.api_key.startsWith('enc:v1:')).toBe(true);
+
+    const row2 = getProviderRow(id);
+    expect(row2?.apiKey).toBe('legacy-plain-key');
+  });
 });

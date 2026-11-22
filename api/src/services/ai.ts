@@ -8,6 +8,7 @@
  * AI bị tắt, hoặc mọi lựa chọn thất bại.
  */
 import { logger } from '../lib/logger.js';
+import { z } from 'zod';
 import {
   aiGlobalEnabled,
   listProviderRows,
@@ -17,14 +18,17 @@ import {
   type AiProviderRow,
 } from './ai-providers.js';
 
-// Mở ngay sau lần lỗi đầu: rate-limit/quota hỏng thường lặp lại ngay, chờ
-// lần thứ hai chỉ tổ làm người dùng đợi thêm mỗi lần tải báo giá.
+// Lỗi "cấu hình sai" (401/403 sai key, 400/404/422 model không tồn tại hoặc request
+// không hợp lệ) không tự khỏi khi thử lại -> mở cầu dao dài hơn nhiều so với lỗi
+// tạm thời (timeout/mạng/5xx/429) vốn có thể biến mất ngay ở lần thử kế tiếp.
 const OPEN_AFTER_FAILS = 1;
-const COOLDOWN_MS = 120_000;
+const PERMANENT_STATUS = new Set([400, 401, 403, 404, 422]);
 
 interface Breaker {
   fails: number;
   openUntil: number;
+  /** true nếu lần mở gần nhất là do lỗi cấu hình (không tự khỏi theo thời gian). */
+  permanent: boolean;
 }
 
 const breakers = new Map<string, Breaker>();
@@ -46,6 +50,28 @@ function numEnv(name: string, fallback: number): number {
   if (!raw) return fallback;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function transientCooldownMs(): number {
+  return numEnv('AI_TRANSIENT_COOLDOWN_MS', 30_000);
+}
+
+function permanentCooldownMs(): number {
+  return numEnv('AI_PERMANENT_COOLDOWN_MS', 600_000);
+}
+
+function maxTokens(): number {
+  return numEnv('AI_MAX_TOKENS', 800);
+}
+
+/** Phân loại lỗi để quyết định thời gian "nghỉ" của cầu dao. */
+function classifyError(err: unknown): { permanent: boolean; status?: number } {
+  if (err instanceof Error && err.name === 'AbortError') return { permanent: false };
+  const msg = err instanceof Error ? err.message : String(err);
+  const m = /HTTP (\d{3})/.exec(msg);
+  if (!m) return { permanent: false }; // lỗi mạng/khác -> coi là tạm thời
+  const status = Number(m[1]);
+  return { permanent: PERMANENT_STATUS.has(status), status };
 }
 
 function trimBase(url: string): string {
@@ -71,7 +97,7 @@ async function runGemini(
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0, maxOutputTokens: 800, responseMimeType: 'application/json' },
+      generationConfig: { temperature: 0, maxOutputTokens: maxTokens(), responseMimeType: 'application/json' },
     }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status} (${model}) ${(await res.text().catch(() => '')).slice(0, 140)}`);
@@ -94,7 +120,10 @@ async function runOpenAiCompatible(
 ): Promise<string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (key) headers.Authorization = `Bearer ${key}`;
-  if (opts.openRouter) headers['X-Title'] = 'IdleInvoice';
+  if (opts.openRouter) {
+    headers['X-Title'] = 'IdleInvoice';
+    headers['HTTP-Referer'] = 'https://github.com/idleinvoice';
+  }
   const res = await fetch(`${trimBase(baseUrl)}/chat/completions`, {
     method: 'POST',
     signal,
@@ -102,7 +131,7 @@ async function runOpenAiCompatible(
     body: JSON.stringify({
       model,
       temperature: 0,
-      max_tokens: 800,
+      max_tokens: maxTokens(),
       messages: [{ role: 'user', content: prompt }],
     }),
   });
@@ -134,7 +163,7 @@ async function runAnthropic(
     },
     body: JSON.stringify({
       model,
-      max_tokens: 800,
+      max_tokens: maxTokens(),
       temperature: 0,
       messages: [{ role: 'user', content: prompt }],
     }),
@@ -205,11 +234,12 @@ function isOpen(name: string): boolean {
   return Boolean(b && b.openUntil > Date.now());
 }
 
-function recordFail(name: string): void {
-  const b = breakers.get(name) ?? { fails: 0, openUntil: 0 };
+function recordFail(name: string, permanent: boolean): void {
+  const b = breakers.get(name) ?? { fails: 0, openUntil: 0, permanent: false };
   b.fails += 1;
   if (b.fails >= OPEN_AFTER_FAILS) {
-    b.openUntil = Date.now() + COOLDOWN_MS;
+    b.openUntil = Date.now() + (permanent ? permanentCooldownMs() : transientCooldownMs());
+    b.permanent = permanent;
     b.fails = 0;
   }
   breakers.set(name, b);
@@ -228,10 +258,12 @@ export interface CompletionResult {
 /**
  * Chạy lần lượt các provider còn "đóng" cầu dao cho tới khi một cái trả lời.
  * Mỗi lần thử bị cắt sau `attemptTimeoutMs`; toàn bộ dừng khi quá `deadline`.
+ * `context` chỉ dùng để nối log với job/báo giá cụ thể khi debug.
  */
 export async function aiCompleteWithProvider(
   prompt: string,
   deadline: number,
+  context?: Record<string, unknown>,
 ): Promise<CompletionResult | null> {
   const timeoutMs = numEnv('AI_ATTEMPT_TIMEOUT_MS', 10_000);
   for (const provider of aiProviders()) {
@@ -246,9 +278,15 @@ export async function aiCompleteWithProvider(
       recordOk(provider.name);
       return { text, provider: provider.name };
     } catch (err) {
-      recordFail(provider.name);
+      const { permanent, status } = classifyError(err);
+      recordFail(provider.name, permanent);
       const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ provider: provider.name, err: msg }, 'AI provider thất bại, thử model kế tiếp');
+      logger.warn(
+        { ...context, provider: provider.name, status, permanent, err: msg },
+        permanent
+          ? 'AI provider lỗi cấu hình (key/model sai?), tạm ngắt lâu hơn'
+          : 'AI provider thất bại tạm thời, thử model kế tiếp',
+      );
     } finally {
       clearTimeout(timer);
     }
@@ -342,20 +380,48 @@ export async function fetchProviderModels(cfg: ProviderConfig, timeoutMs = 15_00
   }
 }
 
-/** Bóc JSON từ phản hồi LLM (chấp nhận có bọc ```json hoặc lời dẫn thừa). */
-export function extractJson<T>(raw: string): T | null {
+/**
+ * Bóc JSON từ phản hồi LLM. Chấp nhận có bọc ```json, lời dẫn thừa trước/sau,
+ * hoặc nhiều object JSON trong cùng phản hồi — thử mọi cặp ngoặc `{...}` cân
+ * bằng (ưu tiên khối dài nhất trước) thay vì chỉ cắt từ `{` đầu tới `}` cuối,
+ * vốn dễ gộp nhầm hai object liền nhau thành một chuỗi không parse được.
+ * Truyền `schema` (Zod) để chỉ chấp nhận candidate đúng hình dạng mong đợi.
+ */
+export function extractJson<T>(raw: string, schema?: z.ZodType<T>): T | null {
   const cleaned = raw
     .replace(/^\s*```(?:json)?/i, '')
     .replace(/```\s*$/, '')
     .trim();
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(cleaned.slice(start, end + 1)) as T;
-  } catch {
-    return null;
+
+  const candidates: string[] = [];
+  for (let i = 0; i < cleaned.length; i++) {
+    if (cleaned[i] !== '{') continue;
+    let depth = 0;
+    for (let j = i; j < cleaned.length; j++) {
+      if (cleaned[j] === '{') depth++;
+      else if (cleaned[j] === '}') {
+        depth--;
+        if (depth === 0) {
+          candidates.push(cleaned.slice(i, j + 1));
+          break;
+        }
+      }
+    }
   }
+  candidates.sort((a, b) => b.length - a.length);
+
+  for (const candidate of candidates) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    if (!schema) return parsed as T;
+    const result = schema.safeParse(parsed);
+    if (result.success) return result.data;
+  }
+  return null;
 }
 
 /** Tranh thủ chạy các tác vụ AI song song nhưng có giới hạn. */
@@ -374,4 +440,9 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
 }
 
 /** Dùng cho test: xóa trạng thái cầu dao. */
-export const __aiInternals = { breakers, OPEN_AFTER_FAILS, COOLDOWN_MS };
+export const __aiInternals = {
+  breakers,
+  OPEN_AFTER_FAILS,
+  transientCooldownMs,
+  permanentCooldownMs,
+};

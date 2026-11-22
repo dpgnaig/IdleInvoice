@@ -19,14 +19,38 @@ def _cell_text(text: str) -> str:
 
 
 def read_docx(data: bytes) -> tuple[list[str], list[list[list[str]]]]:
-    """Trả (các đoạn văn, các bảng dạng grid)."""
+    """Trả (các đoạn văn, các bảng dạng grid).
+
+    Ô bị merge của python-docx trả về nội dung trùng ở nhiều vị trí. Merge
+    NGANG (cùng dòng) bị blank bớt để không nhân đôi giá trị — nếu không, hai
+    cột "Đơn giá" và "Thành tiền" do lỗi soạn thảo bị merge sẽ ra cùng số và
+    ``unit_price`` đọc thành ``amount``. Merge DỌC (qua nhiều dòng) được lấp
+    xuống để cột tên nhóm hàng không trống.
+    """
     doc = Document(io.BytesIO(data))
     paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
     grids: list[list[list[str]]] = []
     for table in doc.tables:
         grid: list[list[str]] = []
+        prev_tc: dict[int, object] = {}  # cột -> _tc dòng trước (merge dọc)
+        prev_val: dict[int, str] = {}
         for row in table.rows:
-            cells = [_cell_text(cell.text) for cell in row.cells]
+            cells: list[str] = []
+            seen_row: dict[object, int] = {}  # _tc -> cột đầu tiên trong dòng
+            for cidx, cell in enumerate(row.cells):
+                tc = cell._tc
+                val = _cell_text(cell.text)
+                if tc in seen_row:
+                    # merge ngang: ô lặp lại trong cùng dòng -> để trống
+                    cells.append("")
+                    continue
+                seen_row[tc] = cidx
+                if tc == prev_tc.get(cidx) and not val:
+                    val = prev_val.get(cidx, "")
+                cells.append(val)
+                prev_tc[cidx] = tc
+                if val:
+                    prev_val[cidx] = val
             if any(cells):
                 grid.append(cells)
         if grid:
@@ -49,13 +73,14 @@ class DocxTableParser(QuoteParser):
         full_text = "\n".join(t for t in (text, tables_text) if t)
         tr.extract_meta(full_text, pq)
 
-        best = None
+        best = None  # (grid_idx, header_idx, mapping, ambiguous)
         for gi, grid in enumerate(grids):
             found = tr.find_table_header(grid)
             if found and (best is None or len(found[1]) > len(best[2])):
-                best = (gi, found[0], found[1])
+                best = (gi, found[0], found[1], found[2])
         if best:
-            gi, hi, mapping = best
+            gi, hi, mapping, ambiguous = best
+            tr.apply_header_warnings(pq, ambiguous, grids[gi][hi])
             pq.lines, totals = tr.grid_lines(grids[gi], hi, mapping)
             tr.apply_totals(totals, pq)
 

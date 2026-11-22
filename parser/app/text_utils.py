@@ -16,6 +16,18 @@ def norm(s: str) -> str:
     return re.sub(r"\s+", " ", strip_accents(s or "").lower()).strip()
 
 
+_SPLIT_MONEY_RE = re.compile(r"(?<=\b\d)\s+(?=[.,]?\d{1,3}(?:[.,]\d{3})+\b)")
+
+
+def merge_split_money(text: str) -> str:
+    """Nối lại số tiền bị PDF căn phải tách rời: "7 ,840,000" / "6 27,200".
+
+    Chỉ nối khi chữ số đứng riêng (một chữ số đầu từ) — không đụng tới cặp
+    "SL 28 | Đơn giá 280,000" vì "28" không phải chữ số đứng riêng.
+    """
+    return _SPLIT_MONEY_RE.sub("", text or "")
+
+
 def parse_money(raw: object) -> int | None:
     """11,200,000 / 11.200.000 / 11 200 000 / 11200000 -> int VND."""
     if raw is None:
@@ -24,7 +36,7 @@ def parse_money(raw: object) -> int | None:
         return None
     if isinstance(raw, (int, float)):
         return round(raw)
-    s = str(raw).strip()
+    s = merge_split_money(str(raw)).strip()
     if not s:
         return None
     negative = s.startswith("(") and s.endswith(")")
@@ -190,8 +202,11 @@ def classify_total(label: str) -> str | None:
         return None
     if "vat" in n and "thue" not in n and not re.search(r"\bvat\b(?!\s+(lieu|tu))", n):
         return None
-    # "Đường kính tổng cộng: 268 mm" -> classify sẽ bắt chữ "tong" và lấy 268 làm tiền
-    if re.search(r"\btong\b.*\b(mm|cm|met|m)\b", n):
+    # "Đường kính tổng cộng: 268 mm", "Tổng độ dài ống: 1145mm" -> đây là
+    # dòng thông số, không phải dòng tổng tiền.
+    if re.search(r"\btong\b.*\b(do dai|khoi luong|trong luong|the tich|dien tich|kich thuoc)\b", n):
+        return None
+    if re.search(r"\btong\b.*\d\s*(mm|cm|met|kg|m)\b", n):
         return None
     if "chua bao gom vat" in n or "truoc vat" in n or "khong bao gom vat" in n or "truoc thue" in n:
         return "subtotal"
@@ -217,7 +232,7 @@ def last_money_in_row(cells: list[str]) -> int | None:
         flat.extend(str(c).split("|"))
     tokens: list[str] = []
     for c in flat:
-        for m in re.finditer(r"\d[\d.,]*\s*%?", c):
+        for m in re.finditer(r"\d[\d.,]*\s*%?", merge_split_money(c)):
             tok = m.group(0).strip()
             if tok.endswith("%"):
                 continue

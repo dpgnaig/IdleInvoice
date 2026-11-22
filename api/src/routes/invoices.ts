@@ -40,11 +40,34 @@ const invoiceBody = z.object({
 const listQuery = z.object({
   status: z.enum(['draft', 'exported']).optional(),
   customerId: z.coerce.number().int().optional(),
+  search: z.string().trim().optional().default(''),
   from: z.string().optional(),
   to: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(200).default(20),
 });
+
+/** Điều kiện lọc dùng chung cho danh sách và tra toàn bộ ID khớp bộ lọc (để xuất Excel không bị giới hạn theo trang). */
+function invoiceFilterConds(req: { user?: { id: number; role: string } }, q: z.infer<typeof listQuery>) {
+  const conds = [];
+  if (req.user!.role !== 'admin') conds.push(eq(invoices.createdBy, req.user!.id));
+  if (q.status) conds.push(eq(invoices.status, q.status));
+  if (q.customerId) conds.push(eq(invoices.customerId, q.customerId));
+  if (q.from) conds.push(sql`${invoices.createdAt} >= ${q.from}`);
+  if (q.to) conds.push(sql`${invoices.createdAt} <= ${q.to}`);
+  if (q.search) {
+    const db = getDb();
+    const term = `%${q.search}%`;
+    const matchingCustomerIds = db
+      .select({ id: customers.id })
+      .from(customers)
+      .where(or(like(customers.name, term), like(customers.taxCode, term)))
+      .all()
+      .map((r) => r.id);
+    conds.push(matchingCustomerIds.length ? inArray(invoices.customerId, matchingCustomerIds) : sql`0`);
+  }
+  return conds.length ? and(...conds) : undefined;
+}
 
 function invoiceDetail(db: ReturnType<typeof getDb>, id: number) {
   const inv = db.select().from(invoices).where(eq(invoices.id, id)).get();
@@ -78,13 +101,7 @@ invoicesRouter.get(
   asyncHandler(async (req, res) => {
     const q = listQuery.parse(req.query);
     const db = getDb();
-    const conds = [];
-    if (req.user!.role !== 'admin') conds.push(eq(invoices.createdBy, req.user!.id));
-    if (q.status) conds.push(eq(invoices.status, q.status));
-    if (q.customerId) conds.push(eq(invoices.customerId, q.customerId));
-    if (q.from) conds.push(sql`${invoices.createdAt} >= ${q.from}`);
-    if (q.to) conds.push(sql`${invoices.createdAt} <= ${q.to}`);
-    const where = conds.length ? and(...conds) : undefined;
+    const where = invoiceFilterConds(req, q);
     const rows = db
       .select()
       .from(invoices)
@@ -122,6 +139,18 @@ invoicesRouter.get(
         totalPages: Math.max(1, Math.ceil(total / q.pageSize)),
       },
     });
+  }),
+);
+
+/** Toàn bộ ID hóa đơn khớp bộ lọc hiện tại — dùng cho "Chọn tất cả" khi xuất Excel
+ * (phải đứng trước /:id). Bảng chỉ hiện một trang nhưng xuất không được giới hạn theo trang. */
+invoicesRouter.get(
+  '/ids',
+  asyncHandler(async (req, res) => {
+    const q = listQuery.parse(req.query);
+    const where = invoiceFilterConds(req, q);
+    const rows = getDb().select({ id: invoices.id }).from(invoices).where(where).all();
+    res.json({ ids: rows.map((r) => r.id) });
   }),
 );
 
@@ -248,7 +277,7 @@ invoicesRouter.get(
   }),
 );
 
-const exportSchema = z.object({ ids: z.array(z.number().int().positive()).min(1).max(500) });
+const exportSchema = z.object({ ids: z.array(z.number().int().positive()).min(1).max(5000) });
 
 invoicesRouter.post(
   '/export',

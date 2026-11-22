@@ -5,6 +5,8 @@
 import { asc, eq } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
 import { aiProviders } from '../db/schema.js';
+import { encryptApiKey, decryptApiKey, isEncryptedApiKey } from '../lib/ai-key-crypto.js';
+import { logger } from '../lib/logger.js';
 import { getSetting, setSetting } from '../lib/settings.js';
 
 export type AiProviderKind = 'gemini' | 'openrouter' | 'openai' | 'anthropic';
@@ -88,18 +90,37 @@ export function publicProvider(row: AiProviderRow) {
   };
 }
 
+/**
+ * Giải mã `api_key` khi đọc. Dữ liệu cũ (trước khi thêm mã hóa) không có tiền
+ * tố `enc:v1:` — tự nâng cấp lên bản mã hóa ngay khi đọc thấy, không cần migration riêng.
+ */
+function decryptRow(row: AiProviderRow): AiProviderRow {
+  if (!row.apiKey) return row;
+  if (isEncryptedApiKey(row.apiKey)) return { ...row, apiKey: decryptApiKey(row.apiKey) };
+  const plain = row.apiKey;
+  try {
+    getDb().update(aiProviders).set({ apiKey: encryptApiKey(plain) }).where(eq(aiProviders.id, row.id)).run();
+  } catch (err) {
+    logger.warn({ err, providerId: row.id }, 'Không nâng cấp được api_key sang bản mã hóa');
+  }
+  return { ...row, apiKey: plain };
+}
+
 export function listProviderRows(): AiProviderRow[] {
-  return getDb()
-    .select()
-    .from(aiProviders)
-    .orderBy(asc(aiProviders.sortOrder), asc(aiProviders.id))
-    .all() as AiProviderRow[];
+  return (
+    getDb()
+      .select()
+      .from(aiProviders)
+      .orderBy(asc(aiProviders.sortOrder), asc(aiProviders.id))
+      .all() as AiProviderRow[]
+  ).map(decryptRow);
 }
 
 export function getProviderRow(id: number): AiProviderRow | undefined {
-  return getDb().select().from(aiProviders).where(eq(aiProviders.id, id)).get() as
+  const row = getDb().select().from(aiProviders).where(eq(aiProviders.id, id)).get() as
     | AiProviderRow
     | undefined;
+  return row ? decryptRow(row) : undefined;
 }
 
 export function createProviderRow(input: {
@@ -120,13 +141,13 @@ export function createProviderRow(input: {
       .orderBy(asc(aiProviders.sortOrder))
       .all()
       .reduce((max, r) => Math.max(max, r.sortOrder), 0) ?? 0;
-  return db
+  const created = db
     .insert(aiProviders)
     .values({
       name: input.name,
       kind: input.kind,
       baseUrl: input.baseUrl,
-      apiKey: input.apiKey,
+      apiKey: encryptApiKey(input.apiKey),
       model: input.model,
       enabled: input.enabled ? 1 : 0,
       sortOrder: input.sortOrder ?? maxOrder + 10,
@@ -135,6 +156,7 @@ export function createProviderRow(input: {
     })
     .returning()
     .get() as AiProviderRow;
+  return decryptRow(created);
 }
 
 export function updateProviderRow(
@@ -156,7 +178,7 @@ export function updateProviderRow(
   if (input.kind !== undefined) patch.kind = input.kind;
   if (input.baseUrl !== undefined) patch.baseUrl = input.baseUrl;
   // Chuỗi rỗng = giữ key cũ (giao diện không bao giờ nhận lại key thật)
-  if (input.apiKey) patch.apiKey = input.apiKey;
+  if (input.apiKey) patch.apiKey = encryptApiKey(input.apiKey);
   if (input.model !== undefined) patch.model = input.model;
   if (input.enabled !== undefined) patch.enabled = input.enabled ? 1 : 0;
   if (input.sortOrder !== undefined) patch.sortOrder = input.sortOrder;

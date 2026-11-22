@@ -41,6 +41,7 @@ export function DataTable<T>({
   pageSize,
   fetching,
   toolbar,
+  selectionBar,
   footer,
   cardRef,
 }: {
@@ -68,6 +69,8 @@ export function DataTable<T>({
   fetching?: boolean;
   /** Bộ lọc/tìm kiếm hiển thị trong thanh công cụ trên cùng của khung bảng. */
   toolbar?: React.ReactNode;
+  /** Thanh trạng thái chọn dòng (vd <SelectionBar>), hiện ngay dưới toolbar, tách riêng để không bị gộp chung. */
+  selectionBar?: React.ReactNode;
   /** Chân khung bảng, thường là <Pagination>. */
   footer?: React.ReactNode;
   /** Ref tới khung bảng, dùng cho useAutoPageSize. */
@@ -186,6 +189,7 @@ export function DataTable<T>({
           )}
         </div>
       )}
+      {selectionBar}
 
       <Table
         containerClassName={cn(!hasToolbar && 'rounded-t-xl', !footer && 'rounded-b-xl')}

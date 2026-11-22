@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import {
-  AlertTriangle, Bot, Building2, CheckCircle2, ChevronDown, ChevronUp, FileText, FileUp, Info,
-  ListChecks, Loader2, Package, Plus, SearchCheck, Trash2, UploadCloud, X, XCircle,
+  AlertTriangle, Bot, Building2, CheckCircle2, FileText, FileUp, Info,
+  Loader2, Package, Plus, SearchCheck, Trash2, UploadCloud, X, XCircle,
 } from 'lucide-react';
 import { DatePicker } from '@/components/ui/date-picker';
 import { api, apiErrorMessage } from '@/lib/api';
@@ -12,7 +12,6 @@ import { endpoints } from '@/lib/endpoints';
 import { cn, formatMoney, todayIso } from '@/lib/utils';
 import { PageHeader } from '@/components/layout/page-header';
 import { Combobox, type ComboOption } from '@/components/ui/combobox';
-import { useDebounced } from '@/lib/use-debounced';
 import { CountUpMoney } from '@/components/ui/count-up';
 import { Dialog, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -118,6 +117,7 @@ const TAX_OPTIONS: ComboOption[] = [
 const STAGES = [
   { key: 'parsing', label: 'Đọc file' },
   { key: 'matching', label: 'Ghép danh mục' },
+  { key: 'fuzzy', label: 'Tìm tương tự (rapidfuzz)' },
   { key: 'ai', label: 'AI đối chiếu' },
   { key: 'tax_lookup', label: 'Tra MST' },
 ] as const;
@@ -127,6 +127,7 @@ const STAGE_LABEL: Record<string, string> = {
   uploading: 'Đang tải lên',
   parsing: 'Đang đọc dữ liệu file',
   matching: 'Đang ghép khách hàng & mã hàng',
+  fuzzy: 'Đang tìm tương tự (rapidfuzz)',
   ai: 'AI đang đối chiếu',
   tax_lookup: 'Đang tra cứu MST',
   done: 'Hoàn tất',
@@ -145,7 +146,7 @@ export default function QuoteImportPage() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<EditableDraft[]>([]);
   const [newCustomerFor, setNewCustomerFor] = useState<number | null>(null);
-  const [progressMinimized, setProgressMinimized] = useState(false);
+  const [viewTab, setViewTab] = useState<'processing' | 'all' | 'ok' | 'need'>('all');
   const inputRef = useRef<HTMLInputElement>(null);
 
   const jobQuery = useQuery({
@@ -159,25 +160,42 @@ export default function QuoteImportPage() {
     refetchInterval: (q) => (q.state.data?.status === 'running' ? 700 : false),
   });
   const job = jobQuery.data;
+  // Theo dõi file đã đưa vào danh sách / đã báo lỗi — để hiện NGAY từng báo giá
+  // vừa đọc xong (không đợi cả lô), và không hiện/toast trùng ở lần poll sau.
+  const seenHashes = useRef<Set<string>>(new Set());
+  const erroredNames = useRef<Set<string>>(new Set());
 
-  // Xong phiên xử lý -> đưa draft vào danh sách chỉnh sửa
+  // Mỗi lần poll: file nào vừa xong thì đưa vào danh sách chỉnh sửa ngay lập tức
   useEffect(() => {
-    if (!job || job.status !== 'done' || !jobId) return;
-    const incoming = job.drafts ?? [];
+    if (!job) return;
+    const incoming = (job.drafts ?? []).filter((d) => !seenHashes.current.has(d.fileHash));
     if (incoming.length) {
+      incoming.forEach((d) => seenHashes.current.add(d.fileHash));
       setDrafts((prev) => [...prev, ...incoming.map(toEditable)]);
-      const ok = incoming.filter((d) => d.status !== 'failed').length;
-      if (ok) toast.success(`Đọc xong ${ok} báo giá`);
-      if (incoming.length > ok) toast.error(`${incoming.length - ok} file không đọc được`);
+      for (const d of incoming) {
+        if (d.status === 'failed') toast.error(`${d.originalName}: ${d.message ?? 'Không đọc được file'}`);
+      }
     }
-    // Lỗi bất ngờ (không sinh draft) vẫn phải hiện cho người dùng
+    // Lỗi bất ngờ (không sinh draft) vẫn phải báo ngay, không đợi cả phiên xong
     for (const f of job.files) {
-      if (f.stage === 'error' && !incoming.some((d) => d.originalName === f.name)) {
+      if (f.stage === 'error' && !erroredNames.current.has(f.name) && !incoming.some((d) => d.originalName === f.name)) {
+        erroredNames.current.add(f.name);
         toast.error(`${f.name}: ${f.message ?? 'Lỗi xử lý file'}`);
       }
     }
+  }, [job]);
+
+  // Cả phiên xong -> dọn trạng thái tải lên + tóm tắt, rồi chuyển khỏi tab "Đang xử lý"
+  // (lỗi từng file đã toast ngay lúc xong ở effect trên, không lặp lại ở đây)
+  useEffect(() => {
+    if (!job || job.status !== 'done' || !jobId) return;
+    const ok = job.files.filter((f) => f.stage === 'done').length;
+    if (ok > 1) toast.success(`Đọc xong ${ok} báo giá`);
     setJobId(null);
     setUploadNames([]);
+    seenHashes.current = new Set();
+    erroredNames.current = new Set();
+    setViewTab((t) => (t === 'processing' ? 'all' : t));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, job?.status]);
 
@@ -198,6 +216,7 @@ export default function QuoteImportPage() {
     setUploading(true);
     setUploadPct(0);
     setUploadNames(arr.map((f) => f.name));
+    setViewTab('processing');
     try {
       const { data } = await api.post(endpoints.quotes.parse, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -267,17 +286,32 @@ export default function QuoteImportPage() {
   });
 
   const readyCount = drafts.filter(canConfirm).length;
+  const needCount = drafts.length - readyCount;
   const showProcessing = uploading || Boolean(jobId && (!job || job.status === 'running'));
 
-  // File đang xử lý: hiện skeleton thay cho vị trí thẻ báo giá tương ứng
-  const processingFiles: JobFileView[] = job?.files
-    ?? uploadNames.map((name) => ({ name, stage: uploading ? 'uploading' : 'queued', pct: uploadPct }));
+  // File đang xử lý: loại các file đã có draft (đọc xong, dù OK hay lỗi) —
+  // file đó đã chuyển hẳn sang tab Báo giá, không hiện trùng ở tab Đang xử lý.
+  const draftFileNames = new Set(drafts.map((d) => d.fileName));
+  const processingFiles: JobFileView[] = (
+    job?.files ?? uploadNames.map((name) => ({ name, stage: uploading ? 'uploading' : 'queued', pct: uploadPct }))
+  ).filter((f) => !draftFileNames.has(f.name));
 
-  // Panel tiến trình nổi ở góc màn hình: mở rộng khi bắt đầu xử lý, người dùng
-  // thu nhỏ được nhưng không bị mất khi bấm ra ngoài.
+  // Tab "Đang xử lý" tự ẩn khi không còn file nào đang chạy; đang đứng ở đó thì
+  // chuyển sang "Tất cả" để không đứng ở một tab rỗng.
   useEffect(() => {
-    if (showProcessing) setProgressMinimized(false);
-  }, [showProcessing]);
+    if (!showProcessing && viewTab === 'processing') setViewTab('all');
+  }, [showProcessing, viewTab]);
+
+  const TABS = [
+    { key: 'processing' as const, label: 'Đang xử lý', count: processingFiles.length, show: showProcessing },
+    { key: 'all' as const, label: 'Tất cả', count: drafts.length, show: true },
+    { key: 'ok' as const, label: 'OK', count: readyCount, show: true },
+    { key: 'need' as const, label: 'Chưa OK', count: needCount, show: true },
+  ].filter((t) => t.show);
+
+  const visibleDrafts = drafts
+    .map((d, idx) => ({ d, idx }))
+    .filter(({ d }) => viewTab === 'all' || viewTab === 'processing' || (viewTab === 'ok' ? canConfirm(d) : !canConfirm(d)));
 
   return (
     <div className="space-y-5">
@@ -286,132 +320,162 @@ export default function QuoteImportPage() {
         description="Đọc PDF/Excel/Word, ghép khách hàng và mã hàng, AI kiểm tra lại rồi bạn xác nhận."
       />
 
-      {/* Khi đang xử lý thì ẩn vùng kéo-thả lớn, chỉ giữ panel tiến trình nổi */}
-      {!showProcessing && (
-        <motion.label
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(e) => { e.preventDefault(); setDragging(false); void handleFiles(e.dataTransfer.files); }}
-          animate={dragging ? { scale: 1.004 } : { scale: 1 }}
+      {/* Vùng kéo-thả: luôn hiện, thu gọn lại khi đã có nội dung để nhường chỗ cho danh sách */}
+      <motion.label
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => { e.preventDefault(); setDragging(false); void handleFiles(e.dataTransfer.files); }}
+        animate={dragging ? { scale: 1.004 } : { scale: 1 }}
+        className={cn(
+          'relative block cursor-pointer overflow-hidden rounded-2xl border bg-card shadow-sm transition-colors',
+          dragging ? 'border-primary ring-2 ring-primary/20' : 'border-border/80 hover:border-primary/40',
+        )}
+      >
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-sky-500/5" />
+        <div
           className={cn(
-            'relative block cursor-pointer overflow-hidden rounded-2xl border bg-card shadow-sm transition-colors',
-            dragging ? 'border-primary ring-2 ring-primary/20' : 'border-border/80 hover:border-primary/40',
+            'relative flex flex-col items-center gap-5 text-center sm:flex-row sm:text-left',
+            drafts.length > 0 || processingFiles.length > 0 ? 'px-5 py-4' : 'px-6 py-8',
           )}
         >
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-sky-500/5" />
-          <div className="relative flex flex-col items-center gap-5 px-6 py-8 text-center sm:flex-row sm:text-left">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-              <UploadCloud className="h-6 w-6" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold">
-                {drafts.length > 0 ? 'Tải thêm báo giá' : 'Kéo thả báo giá vào đây'}
-              </p>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                PDF, Excel hoặc Word · tối đa 10 file mỗi lần · 10 MB mỗi file
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-center gap-1.5 sm:justify-end">
-              {['PDF', 'XLSX', 'XLS', 'DOCX'].map((f) => (
-                <span key={f} className="rounded-md border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                  {f}
-                </span>
-              ))}
-              <span className="ml-1 inline-flex h-9 items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium shadow-sm">
-                <FileUp className="h-4 w-4" /> Chọn file
-              </span>
-            </div>
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+            <UploadCloud className="h-6 w-6" />
           </div>
-          {dragging && (
-            <motion.div
-              className="pointer-events-none absolute inset-0 rounded-2xl border-2 border-primary"
-              animate={{ opacity: [0.4, 1, 0.4] }}
-              transition={{ repeat: Infinity, duration: 1.6 }}
-            />
-          )}
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            accept=".pdf,.xlsx,.xls,.docx"
-            className="sr-only"
-            onChange={(e) => { void handleFiles(e.target.files); e.target.value = ''; }}
-          />
-        </motion.label>
-      )}
-
-      {showProcessing && (
-        <FloatingProgress
-          minimized={progressMinimized}
-          onToggle={() => setProgressMinimized((m) => !m)}
-          uploading={uploading}
-          uploadPct={uploadPct}
-          uploadNames={uploadNames}
-          job={job}
-        />
-      )}
-
-      {drafts.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-4 py-2.5 shadow-sm">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-            <span className="font-medium text-foreground">{drafts.length} báo giá</span>
-            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-              <CheckCircle2 className="h-3.5 w-3.5" /> {readyCount} sẵn sàng
-            </span>
-            {drafts.length - readyCount > 0 && (
-              <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                <AlertTriangle className="h-3.5 w-3.5" /> {drafts.length - readyCount} cần kiểm tra
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold">
+              {drafts.length > 0 || processingFiles.length > 0 ? 'Tải thêm báo giá' : 'Kéo thả báo giá vào đây'}
+            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              PDF, Excel hoặc Word · tối đa 50 file mỗi lần · 10 MB mỗi file
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-1.5 sm:justify-end">
+            {['PDF', 'XLSX', 'XLS', 'DOCX'].map((f) => (
+              <span key={f} className="rounded-md border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {f}
               </span>
+            ))}
+            <span className="ml-1 inline-flex h-9 items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium shadow-sm">
+              <FileUp className="h-4 w-4" /> Chọn file
+            </span>
+          </div>
+        </div>
+        {dragging && (
+          <motion.div
+            className="pointer-events-none absolute inset-0 rounded-2xl border-2 border-primary"
+            animate={{ opacity: [0.4, 1, 0.4] }}
+            transition={{ repeat: Infinity, duration: 1.6 }}
+          />
+        )}
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept=".pdf,.xlsx,.xls,.docx"
+          className="sr-only"
+          onChange={(e) => { void handleFiles(e.target.files); e.target.value = ''; }}
+        />
+      </motion.label>
+
+      {(drafts.length > 0 || processingFiles.length > 0) && (
+        <div className="space-y-4">
+          {/* Tab bar: mỗi khu vực chỉ hiện MỘT loại nội dung — đang xử lý HOẶC báo giá đã xong,
+              không còn skeleton và thẻ thật trộn lẫn trong cùng một danh sách. */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card px-3 py-2 shadow-sm">
+            <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Chế độ xem báo giá">
+              {TABS.map((t) => {
+                const active = viewTab === t.key;
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setViewTab(t.key)}
+                    className={cn(
+                      'relative inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
+                      active ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                    )}
+                  >
+                    {t.key === 'processing' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    {t.key === 'ok' && <CheckCircle2 className="h-3.5 w-3.5" />}
+                    {t.key === 'need' && <AlertTriangle className="h-3.5 w-3.5" />}
+                    {t.label}
+                    <span className={cn('rounded-full px-1.5 text-[10px]', active ? 'bg-primary/15' : 'bg-muted')}>
+                      {t.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {viewTab !== 'processing' && (
+              <Button
+                size="sm"
+                disabled={readyCount === 0 || confirmAll.isPending}
+                onClick={() => void confirmAll.mutateAsync()}
+              >
+                {confirmAll.isPending && <Loader2 className="animate-spin" />}
+                Xác nhận tất cả ({readyCount})
+              </Button>
             )}
           </div>
-          <Button
-            size="sm"
-            disabled={readyCount === 0 || confirmAll.isPending}
-            onClick={() => void confirmAll.mutateAsync()}
-          >
-            {confirmAll.isPending && <Loader2 className="animate-spin" />}
-            Xác nhận tất cả ({readyCount})
-          </Button>
+
+          {viewTab === 'processing' ? (
+            <div className="space-y-5">
+              {processingFiles.map((f, i) => (
+                <DraftSkeleton key={`${f.name}-${i}`} file={f} />
+              ))}
+              {processingFiles.length === 0 && (
+                <div className="rounded-xl border border-dashed bg-card px-4 py-10 text-center text-sm text-muted-foreground">
+                  Không còn file nào đang xử lý.
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {visibleDrafts.length === 0 && (
+                <div className="rounded-xl border border-dashed bg-card px-4 py-10 text-center text-sm text-muted-foreground">
+                  {drafts.length === 0
+                    ? 'Chưa có báo giá nào — đang chờ đọc xong file vừa tải lên.'
+                    : `Không có báo giá nào ở mục "${viewTab === 'ok' ? 'OK' : 'Chưa OK'}".`}
+                </div>
+              )}
+              <AnimatePresence>
+                {visibleDrafts.map(({ d, idx }) => (
+                  <motion.div
+                    key={d.fileHash + idx}
+                    layout
+                    initial={{ opacity: 0, y: 14 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.99 }}
+                    transition={{ delay: Math.min(idx * 0.05, 0.3) }}
+                    className="overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm"
+                  >
+                    <DraftCard
+                      draft={d}
+                      onChange={(patch) => updateDraft(idx, patch)}
+                      onLineChange={(lIdx, patch) => updateLine(idx, lIdx, patch)}
+                      onRemove={() => removeDraft(idx)}
+                      canConfirm={canConfirm(d)}
+                      onConfirm={async () => {
+                        try {
+                          await confirmOne(d);
+                          toast.success('Đã lưu hóa đơn nháp');
+                          removeDraft(idx);
+                          void qc.invalidateQueries({ queryKey: ['invoices'] });
+                        } catch (e) {
+                          toast.error(apiErrorMessage(e));
+                        }
+                      }}
+                      onNewCustomer={() => setNewCustomerFor(idx)}
+                    />
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+          )}
         </div>
       )}
-
-      <div className="space-y-5">
-        {showProcessing && processingFiles.map((f, i) => (
-          <DraftSkeleton key={`${f.name}-${i}`} file={f} />
-        ))}
-        <AnimatePresence>
-          {drafts.map((d, idx) => (
-            <motion.div
-              key={d.fileHash + idx}
-              layout
-              initial={{ opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.99 }}
-              transition={{ delay: Math.min(idx * 0.05, 0.3) }}
-              className="overflow-hidden rounded-xl border bg-card text-card-foreground shadow-sm"
-            >
-              <DraftCard
-                draft={d}
-                onChange={(patch) => updateDraft(idx, patch)}
-                onLineChange={(lIdx, patch) => updateLine(idx, lIdx, patch)}
-                onRemove={() => removeDraft(idx)}
-                canConfirm={canConfirm(d)}
-                onConfirm={async () => {
-                  try {
-                    await confirmOne(d);
-                    toast.success('Đã lưu hóa đơn nháp');
-                    removeDraft(idx);
-                    void qc.invalidateQueries({ queryKey: ['invoices'] });
-                  } catch (e) {
-                    toast.error(apiErrorMessage(e));
-                  }
-                }}
-                onNewCustomer={() => setNewCustomerFor(idx)}
-              />
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
 
       <NewCustomerDialog
         open={newCustomerFor !== null}
@@ -423,7 +487,7 @@ export default function QuoteImportPage() {
           const idx = newCustomerFor;
           void qc.invalidateQueries({ queryKey: ['customers-all'] });
           void qc.invalidateQueries({ queryKey: ['customers'] });
-          void qc.invalidateQueries({ queryKey: ['customer-pick'] });
+          void qc.invalidateQueries({ queryKey: ['customer-options'] });
           if (idx !== null) {
             updateDraft(idx, {
               customerId: c.id,
@@ -436,147 +500,6 @@ export default function QuoteImportPage() {
           toast.success(`Đã thêm khách hàng ${c.name}`);
         }}
       />
-    </div>
-  );
-}
-
-/** Panel tiến trình nổi, thu nhỏ được, không biến mất khi bấm ra ngoài. */
-function FloatingProgress({
-  minimized, onToggle, uploading, uploadPct, uploadNames, job,
-}: {
-  minimized: boolean;
-  onToggle: () => void;
-  uploading: boolean;
-  uploadPct: number;
-  uploadNames: string[];
-  job?: JobView;
-}) {
-  if (minimized) {
-    return (
-      <div className="fixed bottom-4 right-4 z-50 print:hidden">
-        <button
-          type="button"
-          onClick={onToggle}
-          className="flex items-center gap-2 rounded-full border bg-card px-4 py-2 text-sm font-medium shadow-lg transition-colors hover:bg-accent"
-          aria-label="Mở rộng tiến trình xử lý"
-        >
-          <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Đang xử lý…
-          <ChevronUp className="h-4 w-4 text-muted-foreground" />
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="fixed bottom-4 right-4 z-50 w-[min(440px,calc(100vw-2rem))] print:hidden">
-      <div className="overflow-hidden rounded-xl border bg-card text-card-foreground shadow-2xl">
-        <div className="flex items-center justify-between gap-2 border-b bg-muted/40 px-4 py-2">
-          <span className="text-sm font-semibold">Tiến trình xử lý</span>
-          <Button variant="ghost" size="icon" onClick={onToggle} aria-label="Thu nhỏ" title="Thu nhỏ">
-            <ChevronDown />
-          </Button>
-        </div>
-        <div className="max-h-[60vh] overflow-y-auto">
-          <ProcessingPanel
-            uploading={uploading}
-            uploadPct={uploadPct}
-            uploadNames={uploadNames}
-            job={job}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** Bảng tiến trình xử lý từng file: đọc dữ liệu → ghép danh mục → AI → tra MST. */
-function ProcessingPanel({
-  uploading, uploadPct, uploadNames, job,
-}: {
-  uploading: boolean;
-  uploadPct: number;
-  uploadNames: string[];
-  job?: JobView;
-}) {
-  const files: JobFileView[] = job?.files
-    ?? uploadNames.map((name) => ({ name, stage: uploading ? 'uploading' : 'queued', pct: uploadPct }));
-  const running = uploading || job?.status === 'running';
-  const stageIndex = (stage: string) => STAGES.findIndex((s) => s.key === stage);
-
-  return (
-    <div>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-5 py-3">
-        <div className="flex items-center gap-2">
-          {running ? (
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          ) : (
-            <ListChecks className="h-4 w-4 text-primary" />
-          )}
-          <span className="text-sm font-semibold">
-            {running ? `Đang xử lý ${files.length} file` : `Đã xử lý ${files.length} file`}
-          </span>
-        </div>
-        <span className="text-xs text-muted-foreground">Tiến trình tự cập nhật</span>
-      </div>
-      <ul className="divide-y">
-        {files.map((f, i) => {
-          const current = stageIndex(f.stage);
-          const failed = f.stage === 'error';
-          const done = f.stage === 'done';
-          return (
-            <li key={`${f.name}-${i}`} className="px-5 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <span className="flex min-w-0 items-center gap-2 text-sm">
-                  {failed ? (
-                    <XCircle className="h-4 w-4 shrink-0 text-destructive" />
-                  ) : done ? (
-                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                  ) : (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
-                  )}
-                  <span className="truncate" title={f.name}>{f.name}</span>
-                </span>
-                <span className={cn('shrink-0 text-xs', failed ? 'text-destructive' : 'text-muted-foreground')}>
-                  {STAGE_LABEL[f.stage] ?? f.stage}
-                </span>
-              </div>
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-                <motion.div
-                  className={cn('h-full', failed ? 'bg-destructive' : done ? 'bg-emerald-500' : 'bg-primary')}
-                  animate={{ width: `${Math.max(4, Math.min(100, f.pct))}%` }}
-                  transition={{ type: 'spring', stiffness: 120, damping: 24 }}
-                />
-              </div>
-              {current >= 0 && (
-                <div className="mt-2 flex flex-wrap items-center gap-1">
-                  {STAGES.map((s, idx) => (
-                    <span
-                      key={s.key}
-                      className={cn(
-                        'rounded px-1.5 py-0.5 text-[10px]',
-                        idx < current
-                          ? 'text-muted-foreground'
-                          : idx === current
-                            ? 'bg-primary/10 font-medium text-primary'
-                            : 'text-muted-foreground/50',
-                      )}
-                    >
-                      {s.label}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {f.aiProviders && f.aiProviders.length > 0 && (
-                <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px] text-sky-700 dark:text-sky-400">
-                  <Bot className="h-3 w-3 shrink-0" /> AI: {f.aiProviders.join(' · ')}
-                </p>
-              )}
-              {f.message && <p className="mt-1.5 text-xs text-destructive">{f.message}</p>}
-            </li>
-          );
-        })}
-      </ul>
     </div>
   );
 }
@@ -643,61 +566,58 @@ function CustomerField({
   onChange: (patch: Partial<EditableDraft>) => void;
   onNewCustomer: () => void;
 }) {
-  const [search, setSearch] = useState('');
-  const debouncedSearch = useDebounced(search.trim(), 300);
   const tax = normalizeTax(draft.buyerTaxCode);
-  const debouncedTax = useDebounced(tax, 400);
 
-  const remote = useQuery({
-    queryKey: ['customer-pick', debouncedSearch],
+  // Nạp toàn bộ danh mục một lần; combobox tự lọc + cuộn ảo phía client.
+  const all = useQuery({
+    queryKey: ['customer-options'],
     queryFn: async () => {
-      const { data } = await api.get(endpoints.customers.list, {
-        params: { search: debouncedSearch, pageSize: 20 },
-      });
-      return data.data as CustomerLite[];
+      const { data } = await api.get(endpoints.customers.options);
+      return data as CustomerLite[];
     },
+    staleTime: 5 * 60_000,
   });
+  const customers = all.data ?? [];
 
-  // Khớp chính xác theo MST
-  const taxQuery = useQuery({
-    queryKey: ['customer-by-tax', debouncedTax],
-    queryFn: async () => {
-      const { data } = await api.get(endpoints.customers.list, {
-        params: { search: debouncedTax, pageSize: 20 },
-      });
-      const rows = data.data as CustomerLite[];
-      return rows.find((c) => normalizeTax(c.taxCode) === debouncedTax) ?? null;
-    },
-    enabled: debouncedTax.length >= 8,
-  });
+  // Khớp chính xác theo MST trên toàn bộ danh mục (không giới hạn theo trang)
+  const taxHit = useMemo(
+    () =>
+      tax.length >= 8
+        ? customers.find((c) => normalizeTax(c.taxCode) === tax) ?? null
+        : null,
+    [customers, tax],
+  );
 
   // Có MST khớp -> tự điền ô Khách hàng
   useEffect(() => {
-    const hit = taxQuery.data;
-    if (!hit) return;
-    if (draft.customer?.id === hit.id) return;
-    onChange({ customerId: hit.id, customer: hit });
+    if (!taxHit) return;
+    if (draft.customer?.id === taxHit.id) return;
+    onChange({ customerId: taxHit.id, customer: taxHit });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taxQuery.data?.id]);
+  }, [taxHit?.id]);
 
-  const options: ComboOption[] = (remote.data ?? []).map((c) => ({
-    value: String(c.id), label: c.name, hint: `MST ${c.taxCode}`,
-  }));
-  // Luôn giữ khách đang chọn trong danh sách để nhãn không bị mất
-  if (draft.customer && !options.some((o) => o.value === String(draft.customer!.id))) {
-    options.unshift({
-      value: String(draft.customer.id),
-      label: draft.customer.name,
-      hint: `MST ${draft.customer.taxCode}`,
-    });
-  }
+  const options = useMemo<ComboOption[]>(() => {
+    const base: ComboOption[] = customers.map((c) => ({
+      value: String(c.id), label: c.name, hint: `MST ${c.taxCode}`,
+      code: c.taxCode, keywords: `${c.taxCode} ${c.name}`,
+    }));
+    // Luôn giữ khách đang chọn trong danh sách để nhãn không bị mất
+    if (draft.customer && !base.some((o) => o.value === String(draft.customer!.id))) {
+      base.unshift({
+        value: String(draft.customer.id),
+        label: draft.customer.name,
+        hint: `MST ${draft.customer.taxCode}`,
+      });
+    }
+    return base;
+  }, [customers, draft.customer]);
 
   const taxStatus: 'idle' | 'checking' | 'found' | 'notfound' =
-    debouncedTax.length < 8
+    tax.length < 8
       ? 'idle'
-      : taxQuery.isFetching
+      : all.isLoading
         ? 'checking'
-        : taxQuery.data
+        : taxHit
           ? 'found'
           : 'notfound';
 
@@ -705,7 +625,7 @@ function CustomerField({
   const mismatch =
     taxStatus === 'idle'
       ? false
-      : Boolean(draft.customer) && normalizeTax(draft.customer!.taxCode) !== debouncedTax;
+      : Boolean(draft.customer) && normalizeTax(draft.customer!.taxCode) !== tax;
 
   return (
     <div className="grid gap-4">
@@ -745,7 +665,7 @@ function CustomerField({
                 onChange={(v) => {
                   const picked = options.find((o) => o.value === v);
                   if (!picked) return;
-                  const row = (remote.data ?? []).find((c) => String(c.id) === v);
+                  const row = customers.find((c) => String(c.id) === v);
                   const customer = row ?? {
                     id: Number(v),
                     name: picked.label,
@@ -754,8 +674,7 @@ function CustomerField({
                   // Chọn khách hàng thì điền luôn MST của khách đó vào ô MST
                   onChange({ customerId: customer.id, customer, buyerTaxCode: customer.taxCode });
                 }}
-                onSearch={setSearch}
-                loading={remote.isFetching}
+                loading={all.isLoading}
                 placeholder="Chọn khách hàng"
                 searchPlaceholder="Tìm theo tên hoặc MST…"
               />
@@ -1020,34 +939,44 @@ function ProductField({
   onRememberChange: (v: boolean) => void;
 }) {
   const qc = useQueryClient();
-  const [search, setSearch] = useState('');
   // State riêng cho dialog tạo mã hàng — KHÔNG dùng chung với ô tìm kiếm,
   // nếu không thì gõ tìm kiếm sẽ bật dialog.
   const [createOpen, setCreateOpen] = useState(false);
-  const debounced = useDebounced(search.trim(), 300);
-  const query = debounced || line.parsed.model;
 
-  const remote = useQuery({
-    queryKey: ['product-pick', query],
+  // Nạp toàn bộ danh mục hàng hóa một lần; combobox tự lọc + cuộn ảo phía client.
+  const all = useQuery({
+    queryKey: ['product-options'],
     queryFn: async () => {
-      const { data } = await api.get(endpoints.products.list, { params: { search: query, pageSize: 20 } });
-      return data.data as MatchCandidate[];
+      const { data } = await api.get(endpoints.products.options);
+      return data as MatchCandidate[];
     },
+    staleTime: 5 * 60_000,
   });
+  const products = all.data ?? [];
 
-  const options: ComboOption[] = (remote.data ?? []).map((p) => ({
-    value: String(p.id), label: p.name, hint: [p.code, p.unit].filter(Boolean).join(' · '),
-  }));
-  // Luôn giữ mã đang chọn để nhãn không mất khi nằm ngoài trang kết quả
-  if (line.product && !options.some((o) => o.value === String(line.product!.id))) {
-    options.unshift({
-      value: String(line.product.id),
-      label: String(line.product.name),
-      hint: [line.product.code, line.product.unit].filter(Boolean).join(' · '),
-    });
-  }
+  const options = useMemo<ComboOption[]>(() => {
+    const base: ComboOption[] = products.map((p) => ({
+      value: String(p.id), label: p.name, hint: [p.code, p.unit].filter(Boolean).join(' · '),
+      code: p.code, keywords: `${p.code} ${p.name} ${p.unit}`,
+    }));
+    // Luôn giữ mã đang chọn để nhãn không mất khi nằm ngoài danh sách
+    if (line.product && !base.some((o) => o.value === String(line.product!.id))) {
+      base.unshift({
+        value: String(line.product.id),
+        label: String(line.product.name),
+        hint: [line.product.code, line.product.unit].filter(Boolean).join(' · '),
+      });
+    }
+    return base;
+  }, [products, line.product]);
 
-  const noMatch = Boolean(query) && !remote.isFetching && (remote.data ?? []).length === 0;
+  // Model đọc từ báo giá không có trong danh mục -> gợi ý tạo mã mới
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const modelKey = norm(line.parsed.model);
+  const noMatch =
+    Boolean(modelKey) &&
+    !all.isLoading &&
+    !products.some((p) => norm(p.code).includes(modelKey) || norm(p.name).includes(modelKey));
   // Ô chọn hiển thị TÊN hàng hóa; dòng mã đã khớp hiện riêng bên dưới để đối chiếu.
   const selectedCode = line.product?.code ?? '';
   const selectedUnit = line.product?.unit ?? '';
@@ -1059,11 +988,10 @@ function ProductField({
         options={options}
         value={line.productId ? String(line.productId) : null}
         onChange={(v) => {
-          const picked = (remote.data ?? []).find((p) => String(p.id) === v);
+          const picked = products.find((p) => String(p.id) === v);
           if (picked) onPick(picked);
         }}
-        onSearch={setSearch}
-        loading={remote.isFetching}
+        loading={all.isLoading}
         placeholder={line.parsed.model || line.parsed.name.slice(0, 24) || 'Chọn mã hàng'}
         searchPlaceholder="Tìm theo mã hàng…"
       />
@@ -1112,7 +1040,7 @@ function ProductField({
           onCreated={(p) => {
             onPick(p);
             void qc.invalidateQueries({ queryKey: ['products'] });
-            void qc.invalidateQueries({ queryKey: ['product-pick'] });
+            void qc.invalidateQueries({ queryKey: ['product-options'] });
           }}
         />
       )}
@@ -1202,6 +1130,9 @@ function NewProductDialog({
 
 /** Thẻ chờ cho một báo giá đang đọc — giữ chỗ đúng kích thước thẻ thật để không nhảy layout. */
 function DraftSkeleton({ file }: { file: JobFileView }) {
+  const stageIndex = STAGES.findIndex((s) => s.key === file.stage);
+  const failed = file.stage === 'error';
+  const done = file.stage === 'done';
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
@@ -1209,23 +1140,68 @@ function DraftSkeleton({ file }: { file: JobFileView }) {
       aria-busy="true"
       className="overflow-hidden rounded-xl border bg-card shadow-sm"
     >
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/20 px-4 py-3 sm:px-5">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-            <FileText className="h-4 w-4" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-muted-foreground" title={file.name}>
-              {file.name}
-            </p>
-            <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin text-primary" />
-              {STAGE_LABEL[file.stage] ?? file.stage}
-              <span className="tabular-nums">· {Math.max(0, Math.min(100, file.pct))}%</span>
-            </p>
+      <div className="border-b bg-muted/20 px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <span
+              className={cn(
+                'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+                failed ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground',
+              )}
+            >
+              {failed ? <XCircle className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium" title={file.name}>
+                {file.name}
+              </p>
+              <p className={cn('mt-1 flex items-center gap-1.5 text-xs', failed ? 'text-destructive' : 'text-muted-foreground')}>
+                {failed ? (
+                  <XCircle className="h-3 w-3" />
+                ) : done ? (
+                  <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                ) : (
+                  <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                )}
+                {STAGE_LABEL[file.stage] ?? file.stage}
+                <span className="tabular-nums">· {Math.max(0, Math.min(100, file.pct))}%</span>
+              </p>
+            </div>
           </div>
+          <Skeleton className="h-8 w-24" />
         </div>
-        <Skeleton className="h-8 w-24" />
+        <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted">
+          <motion.div
+            className={cn('h-full', failed ? 'bg-destructive' : done ? 'bg-emerald-500' : 'bg-primary')}
+            animate={{ width: `${Math.max(4, Math.min(100, file.pct))}%` }}
+            transition={{ type: 'spring', stiffness: 120, damping: 24 }}
+          />
+        </div>
+        {stageIndex >= 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            {STAGES.map((s, idx) => (
+              <span
+                key={s.key}
+                className={cn(
+                  'rounded px-1.5 py-0.5 text-[10px]',
+                  idx < stageIndex
+                    ? 'text-muted-foreground'
+                    : idx === stageIndex
+                      ? 'bg-primary/10 font-medium text-primary'
+                      : 'text-muted-foreground/50',
+                )}
+              >
+                {s.label}
+              </span>
+            ))}
+          </div>
+        )}
+        {file.aiProviders && file.aiProviders.length > 0 && (
+          <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px] text-sky-700 dark:text-sky-400">
+            <Bot className="h-3 w-3 shrink-0" /> AI: {file.aiProviders.join(' · ')}
+          </p>
+        )}
+        {file.message && <p className="mt-1.5 text-xs text-destructive">{file.message}</p>}
       </div>
 
       <div className="space-y-4 p-4 sm:p-5">
@@ -1403,7 +1379,7 @@ function DraftCard({
           <p>{draft.failed.message}</p>
         </div>
       ) : (
-        <div className={cn('grid', previewOpen && '2xl:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)]')}>
+        <div>
           <div className="min-w-0 space-y-4 p-4 sm:p-5">
             {draft.warnings.length > 0 && (
               <ul className="space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2">
@@ -1637,41 +1613,41 @@ function DraftCard({
               </div>
             </section>
           </div>
-
-          {previewOpen && (
-            <aside className="min-w-0 border-t bg-muted/30 p-3 2xl:border-l 2xl:border-t-0">
-              <div className="2xl:sticky 2xl:top-4">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="truncate text-xs font-medium">File gốc</span>
-                  <div className="flex items-center gap-2">
-                    {previewUrl && (
-                      <Button asChild variant="ghost" size="sm">
-                        <a href={previewUrl} target="_blank" rel="noreferrer">Mở tab mới</a>
-                      </Button>
-                    )}
-                    <Button variant="ghost" size="sm" onClick={() => setPreviewOpen(false)}>
-                      Đóng
-                    </Button>
-                  </div>
-                </div>
-                {!previewUrl && !sheetPreview && (
-                  <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    {previewLoading ? 'Đang đọc nội dung file…' : 'Đang tải file…'}
-                  </p>
-                )}
-                {previewUrl && isPdf && (
-                  <iframe
-                    src={previewUrl}
-                    title={`Xem trước ${draft.fileName}`}
-                    className="h-[70vh] w-full rounded-lg border bg-white"
-                  />
-                )}
-                {sheetPreview && <SheetPreviewDoc doc={sheetPreview} />}
-              </div>
-            </aside>
-          )}
         </div>
+      )}
+
+      {/* File gốc mở trong dialog riêng — không chen vào làm vỡ bố cục thông tin báo giá */}
+      {!draft.failed && (
+        <Dialog
+          open={previewOpen}
+          onOpenChange={setPreviewOpen}
+          title={`File gốc — ${draft.fileName}`}
+          className="max-w-5xl"
+        >
+          <div className="max-h-[78vh] space-y-3 overflow-auto">
+            <div className="flex items-center justify-end gap-2">
+              {previewUrl && (
+                <Button asChild variant="outline" size="sm">
+                  <a href={previewUrl} target="_blank" rel="noreferrer">Mở tab mới</a>
+                </Button>
+              )}
+            </div>
+            {!previewUrl && !sheetPreview && (
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {previewLoading ? 'Đang đọc nội dung file…' : 'Đang tải file…'}
+              </p>
+            )}
+            {previewUrl && isPdf && (
+              <iframe
+                src={previewUrl}
+                title={`Xem trước ${draft.fileName}`}
+                className="h-[70vh] w-full rounded-lg border bg-white"
+              />
+            )}
+            {sheetPreview && <SheetPreviewDoc doc={sheetPreview} />}
+          </div>
+        </Dialog>
       )}
     </div>
   );
