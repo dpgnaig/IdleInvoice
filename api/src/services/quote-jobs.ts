@@ -26,6 +26,8 @@ export interface QuoteJob {
   id: string;
   status: 'running' | 'done';
   createdAt: number;
+  /** AI có bật + có model đang hoạt động lúc tạo phiên; false thì UI ẩn bước "AI đối chiếu". */
+  aiEnabled: boolean;
   files: JobFile[];
 }
 
@@ -39,12 +41,13 @@ function prune(): void {
   }
 }
 
-export function createJob(names: string[]): QuoteJob {
+export function createJob(names: string[], aiOn = false): QuoteJob {
   prune();
   const job: QuoteJob = {
     id: crypto.randomUUID(),
     status: 'running',
     createdAt: Date.now(),
+    aiEnabled: aiOn,
     files: names.map((name) => ({ name, stage: 'queued', pct: 5 })),
   };
   jobs.set(job.id, job);
@@ -75,6 +78,7 @@ export function jobView(job: QuoteJob) {
   return {
     id: job.id,
     status: job.status,
+    aiEnabled: job.aiEnabled,
     files: job.files.map(({ draft: _draft, ...rest }) => rest),
     drafts: job.files.map((f) => f.draft).filter(Boolean),
   };

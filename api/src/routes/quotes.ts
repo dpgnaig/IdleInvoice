@@ -16,6 +16,7 @@ import { parseWithPython, previewWithPython } from '../services/parser-client.js
 import { enrichWithAi, type AiEnrichment, type AiFuzzyHints, type LineSuggestion } from '../services/ai-enrich.js';
 import { fuzzyEnrich, type FuzzyResult } from '../services/fuzzy-enrich.js';
 import { createJob, finishJob, getJob, jobView, updateFile } from '../services/quote-jobs.js';
+import { aiEnabled } from '../services/ai.js';
 import { matchQuote, buildDraft, confirmDraft, lookupDraftCustomer, sha256 } from '../services/quotes.js';
 
 const UPLOAD_ROOT = process.env.UPLOAD_DIR ?? './uploads';
@@ -81,6 +82,7 @@ async function processQuoteFiles(
   userId: number,
 ): Promise<void> {
   const db = getDb();
+  const aiOn = getJob(jobId)?.aiEnabled ?? false;
 
   for (let i = 0; i < files.length; i++) {
     const f = files[i]!;
@@ -154,7 +156,7 @@ async function processQuoteFiles(
       const base = matchQuote(parsed.data);
       updateFile(jobId, i, { stage: 'fuzzy', pct: 50 });
       const fuzzy = await fuzzyEnrich(parsed.data, base.lines.map((l) => l.productMatch));
-      updateFile(jobId, i, { stage: 'ai', pct: 65 });
+      if (aiOn) updateFile(jobId, i, { stage: 'ai', pct: 65 });
       const hints: AiFuzzyHints | undefined = fuzzy
         ? {
             customerShortlist: fuzzy.customerShortlist,
@@ -310,7 +312,7 @@ quotesRouter.post(
       f.originalname = Buffer.from(f.originalname, 'latin1').toString('utf8');
     }
 
-    const job = createJob(files.map((f) => f.originalname));
+    const job = createJob(files.map((f) => f.originalname), aiEnabled());
     res.status(202).json({ jobId: job.id });
     // Trả jobId trước, xử lý tiếp ở nền; lỗi từng file được ghi vào job
     void processQuoteFiles(job.id, files, req.user!.id).catch((err) => {

@@ -222,6 +222,7 @@ export function matchProduct(
       return {
         status: 'candidate',
         productId: null,
+        method: 'model_loose',
         candidates: loose.slice(0, 5).map((p, i) => ({
           id: p.id,
           code: p.code,
@@ -275,6 +276,7 @@ export function matchProduct(
     return {
       status: 'candidate',
       productId: null,
+      method,
       candidates: ranked.slice(0, 5).map((p, i) => ({
         id: p.id,
         code: p.code,
@@ -334,6 +336,9 @@ export function matchProduct(
       return {
         status: 'candidate',
         productId: null,
+        // Dòng CÓ model nhưng model không có trong danh mục: gợi ý theo tên không đủ tin để tự chọn.
+        // Dòng KHÔNG có model: tên hàng là tín hiệu duy nhất nên vẫn tự chọn gợi ý đầu.
+        method: modelKey ? 'name_model_miss' : 'name',
         candidates: scored.slice(0, 5).map((s2) => ({
           id: s2.p.id,
           code: s2.p.code,

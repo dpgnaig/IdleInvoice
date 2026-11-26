@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from '@/components/ui/sonner';
 import {
-  AlertTriangle, Bot, Building2, CheckCircle2, FileText, FileUp, Info,
+  AlertTriangle, Bot, Building2, Check, CheckCircle2, FileText, FileUp, Info,
   Loader2, Package, Plus, SearchCheck, Trash2, UploadCloud, X, XCircle,
 } from 'lucide-react';
 import { DatePicker } from '@/components/ui/date-picker';
@@ -35,7 +35,7 @@ interface ParsedLine {
 }
 interface DraftLine {
   parsed: ParsedLine;
-  productMatch: { status: 'matched' | 'candidate' | 'unmatched'; productId: number | null; product?: MatchCandidate | null; candidates?: MatchCandidate[] };
+  productMatch: { status: 'matched' | 'candidate' | 'unmatched'; productId: number | null; product?: MatchCandidate | null; method?: string; candidates?: MatchCandidate[] };
   qty: number | null;
   unitPrice: number | null;
   amount: number | null;
@@ -116,11 +116,11 @@ const TAX_OPTIONS: ComboOption[] = [
 ];
 
 const STAGES = [
-  { key: 'parsing', label: 'Đọc file' },
-  { key: 'matching', label: 'Ghép danh mục' },
-  { key: 'fuzzy', label: 'Tìm tương tự (rapidfuzz)' },
-  { key: 'ai', label: 'AI đối chiếu' },
-  { key: 'tax_lookup', label: 'Tra MST' },
+  { key: 'parsing', label: 'Đọc file', icon: FileText },
+  { key: 'matching', label: 'Ghép danh mục', icon: Package },
+  { key: 'fuzzy', label: 'Tìm tương tự', icon: SearchCheck },
+  { key: 'ai', label: 'AI đối chiếu', icon: Bot },
+  { key: 'tax_lookup', label: 'Tra MST', icon: Building2 },
 ] as const;
 
 const STAGE_LABEL: Record<string, string> = {
@@ -136,7 +136,7 @@ const STAGE_LABEL: Record<string, string> = {
 };
 
 interface JobFileView { name: string; stage: string; pct: number; message?: string; aiProviders?: string[] }
-interface JobView { id: string; status: 'running' | 'done'; files: JobFileView[]; drafts?: Draft[] }
+interface JobView { id: string; status: 'running' | 'done'; aiEnabled?: boolean; files: JobFileView[]; drafts?: Draft[] }
 
 export default function QuoteImportPage() {
   const qc = useQueryClient();
@@ -145,6 +145,8 @@ export default function QuoteImportPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
   const [uploadNames, setUploadNames] = useState<string[]>([]);
+  // File đã đọc xong (đã có draft) nhưng thẻ chờ còn đang chạy nốt các bước — giữ lại để người dùng thấy bước cuối
+  const [finishing, setFinishing] = useState<JobFileView[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<EditableDraft[]>([]);
   const [newCustomerFor, setNewCustomerFor] = useState<number | null>(null);
@@ -173,6 +175,12 @@ export default function QuoteImportPage() {
     const incoming = (job.drafts ?? []).filter((d) => !seenHashes.current.has(d.fileHash));
     if (incoming.length) {
       incoming.forEach((d) => seenHashes.current.add(d.fileHash));
+      const finished = job.files
+        .filter((f) => incoming.some((d) => d.originalName === f.name))
+        .map((f) => ({ ...f, stage: f.stage === 'error' ? 'error' : 'done' }));
+      if (finished.length) {
+        setFinishing((prev) => [...prev, ...finished.filter((f) => !prev.some((p) => p.name === f.name))]);
+      }
       setDrafts((prev) => [...prev, ...incoming.map(toEditable)]);
       for (const d of incoming) {
         if (d.status === 'failed') toast.error(`${d.originalName}: ${d.message ?? 'Không đọc được file'}`);
@@ -197,7 +205,6 @@ export default function QuoteImportPage() {
     setUploadNames([]);
     seenHashes.current = new Set();
     erroredNames.current = new Set();
-    setViewTab((t) => (t === 'processing' ? 'all' : t));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, job?.status]);
 
@@ -289,14 +296,21 @@ export default function QuoteImportPage() {
 
   const readyCount = drafts.filter(canConfirm).length;
   const needCount = drafts.length - readyCount;
-  const showProcessing = uploading || Boolean(jobId && (!job || job.status === 'running'));
+  const showProcessing = uploading || finishing.length > 0 || Boolean(jobId && (!job || job.status === 'running'));
 
   // File đang xử lý: loại các file đã có draft (đọc xong, dù OK hay lỗi) —
   // file đó đã chuyển hẳn sang tab Báo giá, không hiện trùng ở tab Đang xử lý.
   const draftFileNames = new Set(drafts.map((d) => d.fileName));
-  const processingFiles: JobFileView[] = (
-    job?.files ?? uploadNames.map((name) => ({ name, stage: uploading ? 'uploading' : 'queued', pct: uploadPct }))
-  ).filter((f) => !draftFileNames.has(f.name));
+  const baseFiles: JobFileView[] =
+    job?.files ?? uploadNames.map((name) => ({ name, stage: uploading ? 'uploading' : 'queued', pct: uploadPct }));
+  // File đang "chạy nốt" vẫn hiện ở tab Đang xử lý (dùng bản chụp đã xong) cho tới khi thẻ chờ diễn hết các bước
+  const finishingByName = new Map(finishing.map((f) => [f.name, f]));
+  const processingFiles: JobFileView[] = [
+    ...baseFiles
+      .map((f) => finishingByName.get(f.name) ?? f)
+      .filter((f) => finishingByName.has(f.name) || !draftFileNames.has(f.name)),
+    ...finishing.filter((f) => !baseFiles.some((b) => b.name === f.name)),
+  ];
 
   // Tab "Đang xử lý" tự ẩn khi không còn file nào đang chạy; đang đứng ở đó thì
   // chuyển sang "Tất cả" để không đứng ở một tab rỗng.
@@ -366,7 +380,7 @@ export default function QuoteImportPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-1.5 sm:justify-end">
-            {['PDF', 'XLSX', 'XLS', 'DOCX'].map((f) => (
+            {['PDF', 'XLSX', 'XLS', 'DOCX', 'DOC'].map((f) => (
               <span key={f} className="rounded-md border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                 {f}
               </span>
@@ -439,8 +453,13 @@ export default function QuoteImportPage() {
 
           {viewTab === 'processing' ? (
             <div className="space-y-5">
-              {processingFiles.map((f, i) => (
-                <DraftSkeleton key={`${f.name}-${i}`} file={f} />
+              {processingFiles.map((f) => (
+                <DraftSkeleton
+                  key={f.name}
+                  file={f}
+                  aiEnabled={job?.aiEnabled ?? false}
+                  onFinished={() => setFinishing((prev) => prev.filter((x) => x.name !== f.name))}
+                />
               ))}
               {processingFiles.length === 0 && (
                 <div className="rounded-xl border border-dashed bg-card px-4 py-10 text-center text-sm text-muted-foreground">
@@ -538,9 +557,16 @@ function toEditable(d: Draft): EditableDraft {
     // `matched`: dùng sản phẩm đã ghép chắc chắn. `candidate` (nhiều mã cùng khớp, vd
     // "LT - 040" -> LT-040-0.75/1.1/1.5/2.2kw): tự chọn gợi ý đầu tiên (điểm cao nhất),
     // các gợi ý còn lại hiện bên dưới ô để người dùng đổi.
+    // Dòng CÓ model nhưng model không có trong danh mục (`name_model_miss`) KHÔNG được tự chọn:
+    // vẫn hiện trong danh sách ứng viên nhưng để người dùng tự quyết.
+    // Dòng không có model thì khớp theo tên hàng (`name`) vẫn tự chọn như cũ.
+    const method = l.productMatch.method ?? '';
+    const modelBased = method.startsWith('model') || method === 'name';
     const certain = l.productMatch.status === 'matched'
       ? l.productMatch.product ?? null
-      : (l.productMatch.candidates ?? [])[0] ?? null;
+      : modelBased
+        ? (l.productMatch.candidates ?? [])[0] ?? null
+        : null;
     return {
       key: `${i}-${l.parsed.line_no}`,
       parsed: l.parsed,
@@ -1149,11 +1175,54 @@ function NewProductDialog({
   );
 }
 
+/** Thời gian tối thiểu mỗi bước được hiển thị, để người dùng kịp nhìn thấy từng bước. */
+const STEP_MIN_MS = 900;
+
+/**
+ * Backend có thể nhảy qua nhiều stage giữa hai lần poll. Hook này đi lần lượt từng bước
+ * (không bỏ qua bước nào), mỗi bước dừng tối thiểu STEP_MIN_MS. Bước đầu hiện ngay.
+ * `target` = -1 (đang chờ / lỗi) thì giữ nguyên bước đang hiện.
+ */
+function useSteppedIndex(target: number): number {
+  const [shown, setShown] = useState(-1);
+  useEffect(() => {
+    if (shown >= target) return;
+    const timer = setTimeout(
+      () => setShown((s) => Math.min(s + 1, target)),
+      shown < 0 ? 0 : STEP_MIN_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [shown, target]);
+  return shown;
+}
+
 /** Thẻ chờ cho một báo giá đang đọc — giữ chỗ đúng kích thước thẻ thật để không nhảy layout. */
-function DraftSkeleton({ file }: { file: JobFileView }) {
-  const stageIndex = STAGES.findIndex((s) => s.key === file.stage);
+function DraftSkeleton({ file, aiEnabled, onFinished }: { file: JobFileView; aiEnabled: boolean; onFinished: () => void }) {
+  // Không có model AI nào đang bật thì ẩn hẳn bước "AI đối chiếu"
+  const steps = STAGES.filter((s) => s.key !== 'ai' || aiEnabled);
   const failed = file.stage === 'error';
   const done = file.stage === 'done';
+  // Xong thì chạy tiếp qua các bước còn lại tới bước cuối thay vì biến mất đột ngột
+  const targetIndex = done ? steps.length - 1 : steps.findIndex((s) => s.key === file.stage);
+  const stageIndex = useSteppedIndex(targetIndex);
+  const reachedEnd = done && stageIndex >= targetIndex;
+  const shownKey = !failed && !reachedEnd && stageIndex >= 0 ? steps[stageIndex]?.key : undefined;
+
+  // Đã chạy tới bước cuối: dừng một nhịp ở bước cuối, đánh dấu hoàn tất tất cả, rồi mới báo cha gỡ thẻ chờ
+  const [settled, setSettled] = useState(false);
+  const finishedRef = useRef(onFinished);
+  finishedRef.current = onFinished;
+  useEffect(() => {
+    if (!reachedEnd) return;
+    const t1 = setTimeout(() => setSettled(true), 800);
+    const t2 = setTimeout(() => finishedRef.current(), 1700);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [reachedEnd]);
+  useEffect(() => {
+    if (!failed) return;
+    const t = setTimeout(() => finishedRef.current(), 1800);
+    return () => clearTimeout(t);
+  }, [failed]);
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -1179,43 +1248,58 @@ function DraftSkeleton({ file }: { file: JobFileView }) {
               <p className={cn('mt-1 flex items-center gap-1.5 text-xs', failed ? 'text-destructive' : 'text-muted-foreground')}>
                 {failed ? (
                   <XCircle className="h-3 w-3" />
-                ) : done ? (
+                ) : reachedEnd ? (
                   <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
                 ) : (
                   <Loader2 className="h-3 w-3 animate-spin text-primary" />
                 )}
-                {STAGE_LABEL[file.stage] ?? file.stage}
-                <span className="tabular-nums">· {Math.max(0, Math.min(100, file.pct))}%</span>
+                {STAGE_LABEL[shownKey ?? (reachedEnd ? 'done' : file.stage)] ?? file.stage}
+                {stageIndex < 0 && !failed && (
+                  <span className="tabular-nums">· {Math.max(0, Math.min(100, file.pct))}%</span>
+                )}
               </p>
             </div>
           </div>
           <Skeleton className="h-8 w-24" />
         </div>
-        <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted">
-          <motion.div
-            className={cn('h-full', failed ? 'bg-destructive' : done ? 'bg-emerald-500' : 'bg-primary')}
-            animate={{ width: `${Math.max(4, Math.min(100, file.pct))}%` }}
-            transition={{ type: 'spring', stiffness: 120, damping: 24 }}
-          />
-        </div>
-        {stageIndex >= 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-1">
-            {STAGES.map((s, idx) => (
-              <span
-                key={s.key}
-                className={cn(
-                  'rounded px-1.5 py-0.5 text-[10px]',
-                  idx < stageIndex
-                    ? 'text-muted-foreground'
-                    : idx === stageIndex
-                      ? 'bg-primary/10 font-medium text-primary'
-                      : 'text-muted-foreground/50',
-                )}
-              >
-                {s.label}
-              </span>
-            ))}
-          </div>
+        {stageIndex >= 0 && !failed && (
+          <ol className="mt-3 flex gap-1.5" aria-label="Các bước xử lý">
+            {steps.map((s, idx) => {
+              const isDone = idx < stageIndex || settled;
+              const isActive = idx === stageIndex && !settled;
+              return (
+                <li key={s.key} aria-current={isActive ? 'step' : undefined} className="min-w-0 flex-1">
+                  <div className="relative h-1 overflow-hidden rounded-full bg-muted">
+                    {isDone && (
+                      <motion.span
+                        className={cn('absolute inset-0 origin-left rounded-full', reachedEnd ? 'bg-emerald-500' : 'bg-primary')}
+                        initial={{ scaleX: 0 }}
+                        animate={{ scaleX: 1 }}
+                        transition={{ duration: 0.4, ease: 'easeOut' }}
+                      />
+                    )}
+                    {isActive && (
+                      <motion.span
+                        className="absolute inset-y-0 left-0 w-2/5 rounded-full bg-primary"
+                        animate={{ x: ['-100%', '250%'] }}
+                        transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                      />
+                    )}
+                  </div>
+                  <p
+                    title={s.label}
+                    className={cn(
+                      'mt-1.5 flex items-center gap-1 text-[11px] leading-none transition-colors duration-300',
+                      isActive ? 'font-medium text-primary' : isDone ? 'text-foreground/70' : 'text-muted-foreground/50',
+                    )}
+                  >
+                    {isDone && <Check className="h-3 w-3 shrink-0" />}
+                    <span className="truncate">{s.label}</span>
+                  </p>
+                </li>
+              );
+            })}
+          </ol>
         )}
         {file.aiProviders && file.aiProviders.length > 0 && (
           <p className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px] text-sky-700 dark:text-sky-400">

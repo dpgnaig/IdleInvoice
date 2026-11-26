@@ -72,6 +72,7 @@ adminRouter.get(
 );
 
 const patchUserSchema = z.object({
+  fullName: z.string().trim().min(1, 'Họ tên không được để trống').max(255).optional(),
   status: z.enum(['pending', 'active', 'locked']).optional(),
   role: z.enum(['admin', 'accountant']).optional(),
 });
