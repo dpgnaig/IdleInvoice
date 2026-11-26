@@ -74,15 +74,16 @@ def test_unsupported_format(client):
     assert r.json()["error_code"] == "UNSUPPORTED_FORMAT"
 
 
-def test_doc_legacy_bao_huong_dan(client):
-    """.doc (Word 97-2003) chưa hỗ trợ -> gợi ý lưu thành .docx."""
+def test_doc_hong_bao_loi_parse_failed(client):
+    """.doc (Word 97-2003) được đọc bằng Python thuần; file hỏng -> PARSE_FAILED, không crash."""
     r = client.post(
         "/parse",
         files={"file": ("bao_gia.doc", io.BytesIO(b"\xd0\xcf\x11\xe0"))},
         headers={"X-Internal-Key": "test-key"},
     )
     assert r.status_code == 422
-    assert ".docx" in r.json()["message"]
+    assert r.json()["error_code"] == "PARSE_FAILED"
+    assert ".doc" in r.json()["message"]
 
 
 def _docx_bytes() -> bytes:

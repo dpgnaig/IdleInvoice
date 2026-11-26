@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { and, count, desc, eq, like, or } from 'drizzle-orm';
 import { getDb } from '../db/index.js';
-import { auditLogs, customers, users } from '../db/schema.js';
+import { auditLogs, customers, invoices, quoteFiles, refreshTokens, users } from '../db/schema.js';
 import { writeAudit } from '../lib/audit.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { getEnv } from '../env.js';
@@ -107,11 +107,39 @@ adminRouter.post(
     const user = db.select().from(users).where(eq(users.id, id)).get();
     if (!user) throw notFound('Không tìm thấy người dùng');
     db.update(users)
-      .set({ passwordHash: await hashPassword(body.password), updatedAt: new Date().toISOString() })
+      .set({
+        passwordHash: await hashPassword(body.password),
+        failedLoginCount: 0,
+        lockedUntil: null,
+        updatedAt: new Date().toISOString(),
+      })
       .where(eq(users.id, id))
       .run();
+    // Đăng xuất mọi phiên cũ của user này
+    db.delete(refreshTokens).where(eq(refreshTokens.userId, id)).run();
     writeAudit(req.user!.id, 'reset_password', 'user', id, {});
     res.json({ ok: true, message: 'Đã đặt lại mật khẩu' });
+  }),
+);
+
+adminRouter.delete(
+  '/users/:id',
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) throw badRequest('ID người dùng không hợp lệ');
+    if (id === req.user!.id) throw badRequest('Không thể tự xóa tài khoản của mình');
+    const db = getDb();
+    const user = db.select().from(users).where(eq(users.id, id)).get();
+    if (!user) throw notFound('Không tìm thấy người dùng');
+    // Giữ lại dữ liệu nghiệp vụ/nhật ký, chỉ bỏ liên kết tới user bị xóa (refresh_tokens tự cascade)
+    db.transaction((tx) => {
+      tx.update(quoteFiles).set({ uploadedBy: null }).where(eq(quoteFiles.uploadedBy, id)).run();
+      tx.update(invoices).set({ createdBy: null }).where(eq(invoices.createdBy, id)).run();
+      tx.update(auditLogs).set({ userId: null }).where(eq(auditLogs.userId, id)).run();
+      tx.delete(users).where(eq(users.id, id)).run();
+    });
+    writeAudit(req.user!.id, 'delete', 'user', id, { email: user.email });
+    res.json({ ok: true });
   }),
 );
 

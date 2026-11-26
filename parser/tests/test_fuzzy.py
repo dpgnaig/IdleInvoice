@@ -158,3 +158,62 @@ def test_product_cong_suat_khac_mo_ta_giong_het_van_phan_biet():
     }]
     out = fuzzy.product_candidates(lines, POWER_PRODUCTS, limit=4)
     assert out[0][0]["id"] == 32
+
+
+# --- Giữ đúng dạng viết của model (gạch ngang) — dữ liệu thật trong DB ---
+
+HD_REAL = [
+    {"id": 1000, "code": "HD270", "name": "Đĩa phân phối khí Jaeger HD270, loại có màng: EPDM F053A", "unit": "Cái"},
+    {"id": 1358, "code": "HD270-SILICON", "name": "Đĩa phân phối khí Jaeger HD270, màng: silicone", "unit": "Cái"},
+    {"id": 1528, "code": "HD270KHAU", "name": "Đĩa phân phối khí Jaeger HD270 loại có màng: EPDM F053A, bao gồm khớp nối", "unit": "Bộ"},
+    {"id": 133, "code": "HD-270(TQ)", "name": "Đĩa phân phối khí Jaeger HD-270, loại có màng: EPDM F053A", "unit": "Cái"},
+    {"id": 131, "code": "HD-270bgkhau", "name": "Đĩa phân phối khí Jaeger HD-270, loại có màng: EPDM F053A, bao gồm khớp nối", "unit": "Cái"},
+]
+
+
+def test_model_co_gach_ngang_uu_tien_ma_co_gach_ngang():
+    lines = [{
+        "name": "ĐĨA PHÂN PHỐI KHÍ TINH",
+        "model": "HD-270",
+        "spec": "Jaeger HD-270, màng EPDM F053A",
+        "brand": "Jaeger",
+    }]
+    out = fuzzy.product_candidates(lines, HD_REAL, limit=5)[0]
+    by_id = {c["id"]: c for c in out}
+    # Hai mã viết đúng "HD-270" đứng trên mọi mã chỉ giống sau khi bỏ gạch ngang
+    assert out[0]["id"] in (133, 131)
+    for dashed in (133, 131):
+        for plain in (1000, 1358, 1528):
+            assert by_id[dashed]["codeScore"] > by_id[plain]["codeScore"]
+    assert by_id[133]["score"] > by_id[1000]["score"]
+
+
+def test_model_viet_lien_uu_tien_ma_viet_lien():
+    lines = [{"name": "ĐĨA PHÂN PHỐI KHÍ", "model": "HD270", "spec": "", "brand": ""}]
+    out = fuzzy.product_candidates(lines, HD_REAL, limit=5)[0]
+    assert out[0]["id"] == 1000
+    assert out[0]["codeScore"] == 1.0
+
+
+def test_ma_khong_khop_nham_chu_so_tiep_theo():
+    # "HD-270" không được coi là tiền tố đúng dạng của "HD-2700"
+    assert fuzzy._code_score("HD-270", "HD-2700") < 0.97
+    assert fuzzy._code_score("HD-270", "HD-270(TQ)") == 0.97
+    assert fuzzy._code_score("HD-270", "HD270") < 0.97
+
+
+def test_ma_keo_dai_bang_chu_so_bi_tru_nang():
+    # Khác model (thêm chữ số) phải thấp hơn hẳn khác dấu phân cách
+    same_model = fuzzy._code_score("HD-270", "HD270")
+    assert same_model == 0.9
+    for line, code in [("HD-270", "HD-2700"), ("HD270", "HD2700"),
+                       ("ABC-100", "ABC-1000"), ("LT-050", "LT0501")]:
+        assert fuzzy._code_score(line, code) <= 0.6, (line, code)
+        assert fuzzy._code_score(code, line) <= 0.6, (code, line)
+
+
+def test_ma_co_hau_to_cong_suat_khong_bi_tru():
+    # Dấu '-' ngăn cách công suất => vẫn là cùng dòng máy, không bị coi là kéo dài số
+    assert fuzzy._code_score("LT040", "LT-040-1.5kw") == 0.9
+    assert fuzzy._code_score("LT-040", "LT-040-1.5kw") == 0.97
+    assert fuzzy._code_score("HD270", "HD-270(TQ)") == 0.9

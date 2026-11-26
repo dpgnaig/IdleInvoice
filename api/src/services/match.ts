@@ -174,6 +174,14 @@ interface Scored {
 }
 
 /**
+ * Khoá theo ĐÚNG dạng viết: chỉ bỏ khoảng trắng và hoa/thường, GIỮ dấu gạch ngang.
+ * "HD-270" và "HD270" là hai khoá khác nhau (khác `codeKey`, vốn bỏ hết dấu).
+ */
+function litKey(s: string): string {
+  return String(s ?? '').toUpperCase().replace(/\s+/g, '');
+}
+
+/**
  * Ghép dòng báo giá với mã hàng trong danh mục.
  *
  * Thứ tự ưu tiên (theo nghiệp vụ: "model là khoá chính"):
@@ -195,16 +203,34 @@ export function matchProduct(
   const db = getDb();
   const all = db.select().from(products).all();
 
-  const byKey = new Map<string, typeof products.$inferSelect>();
-  for (const p of all) byKey.set(codeKey(p.code), p);
-
   const modelKey = codeKey(line.model);
 
-  // 1. model trùng khít mã hàng (bỏ hết dấu, hoa/thường)
-  if (modelKey) {
-    const hit = byKey.get(modelKey);
+  // 1. model trùng khít mã hàng THEO ĐÚNG DẠNG VIẾT (chỉ bỏ khoảng trắng, hoa/thường).
+  //    "HD-270" khớp "HD-270" nhưng KHÔNG tự khớp "HD270".
+  const modelLit = litKey(line.model);
+  if (modelLit) {
+    const hit = all.find((p) => litKey(p.code) === modelLit);
     if (hit) {
       return { status: 'matched', productId: hit.id, product: toProduct(hit), method: 'model_exact' };
+    }
+  }
+
+  // 1b. chỉ giống nhau sau khi bỏ dấu ("HD-270" ~ "HD270"): không tự gắn, đưa ra để người dùng chọn.
+  if (modelKey) {
+    const loose = all.filter((p) => codeKey(p.code) === modelKey);
+    if (loose.length > 0) {
+      return {
+        status: 'candidate',
+        productId: null,
+        candidates: loose.slice(0, 5).map((p, i) => ({
+          id: p.id,
+          code: p.code,
+          name: p.name,
+          unit: p.unit,
+          score: Math.max(0.6, 0.85 - i * 0.05),
+          reason: 'trùng mã sau khi bỏ ký tự đặc biệt (khác dạng viết)',
+        })),
+      };
     }
   }
 

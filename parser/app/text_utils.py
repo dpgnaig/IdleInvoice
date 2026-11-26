@@ -210,6 +210,10 @@ def classify_total(label: str) -> str | None:
         return None
     if "chua bao gom vat" in n or "truoc vat" in n or "khong bao gom vat" in n or "truoc thue" in n:
         return "subtotal"
+    # "TỔNG GIÁ SAU THUẾ" / "Thành tiền sau VAT" là tổng thanh toán, không phải
+    # dòng tiền thuế (nhãn có chữ "thuế" nên nếu không bắt ở đây sẽ bị xếp vào vat).
+    if "sau thue" in n or "sau vat" in n:
+        return "total"
     if "thanh tien" in n or "tong cong" in n or "tong thanh toan" in n or "tong tien thanh toan" in n:
         return "total"
     # "Tổng giá trị đã bao gồm VAT" là tổng thanh toán, không phải dòng thuế

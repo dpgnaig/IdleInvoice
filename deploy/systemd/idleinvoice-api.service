@@ -1,0 +1,16 @@
+[Unit]
+Description=IdleInvoice API
+After=network.target idleinvoice-parser.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/idleinvoice/api
+EnvironmentFile=/opt/idleinvoice/api/.env
+Environment=NODE_OPTIONS=--max-old-space-size=256
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+User=www-data
+
+[Install]
+WantedBy=multi-user.target

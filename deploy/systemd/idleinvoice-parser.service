@@ -1,0 +1,17 @@
+[Unit]
+Description=IdleInvoice Parser
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/idleinvoice/parser
+EnvironmentFile=/opt/idleinvoice/api/.env
+Environment=PARSER_PORT=8001
+Environment=MAX_FILE_MB=10
+ExecStart=/opt/idleinvoice/parser/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --workers 1
+Restart=on-failure
+RestartSec=5
+User=www-data
+
+[Install]
+WantedBy=multi-user.target

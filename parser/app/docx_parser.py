@@ -10,6 +10,7 @@ import io
 from docx import Document
 
 from .base import QuoteParser
+from .doc_reader import read_doc
 from .models import ParsedQuote
 from . import table_reader as tr
 
@@ -66,6 +67,10 @@ class DocxTableParser(QuoteParser):
 
     def parse(self, data: bytes, filename: str) -> ParsedQuote:
         paragraphs, grids = read_docx(data)
+        return self.parse_content(paragraphs, grids)
+
+    def parse_content(self, paragraphs: list[str], grids: list[list[list[str]]]) -> ParsedQuote:
+        """Phân tích đoạn văn + bảng đã đọc (dùng chung cho .docx và .doc)."""
         pq = ParsedQuote()
 
         text = "\n".join(paragraphs)
@@ -105,3 +110,23 @@ class DocxTableParser(QuoteParser):
         if not pq.lines:
             pq.warnings.append("Không trích được bảng hàng hóa từ file Word")
         return tr.finalize(pq)
+
+
+def read_word(data: bytes) -> tuple[list[str], list[list[list[str]]]]:
+    """Đọc file Word bất kể đuôi: .docx (zip, bắt đầu bằng PK) hoặc .doc (OLE)."""
+    if data[:2] == b"PK":
+        return read_docx(data)  # đặt đuôi .doc nhưng thực chất là .docx
+    return read_doc(data)
+
+
+class DocParser(QuoteParser):
+    """File .doc cũ: đọc bằng Python thuần (doc_reader) rồi dùng chung DocxTableParser."""
+
+    name = "doc"
+
+    def can_parse(self, filename: str) -> bool:
+        return filename.lower().endswith(".doc")
+
+    def parse(self, data: bytes, filename: str) -> ParsedQuote:
+        paragraphs, grids = read_word(data)
+        return DocxTableParser().parse_content(paragraphs, grids)

@@ -24,6 +24,11 @@ HEADER_KEYWORDS: dict[str, list[str]] = {
         "ten hang",
         "ten thiet bi",
         "ten hang hoa",
+        "ten san pham",
+        "ten mat hang",
+        "ten vat tu",
+        "ten dich vu",
+        "ten cong viec",
         "hang hoa dich vu",
         "noi dung",
         "dien giai",
@@ -44,7 +49,8 @@ HEADER_KEYWORDS: dict[str, list[str]] = {
     "origin": ["xuat xu", "nuoc san xuat", "nuoc", "made in"],
     "desc": ["mo ta chi tiet", "mo ta", "quy cach", "thong so ky thuat"],
     "unit": ["dvt", "don vi tinh", "dv", "don vi"],
-    "qty": ["so luong", "sl", "khoi luong"],
+    # "S/L", "SL.", "Số lg" là cách viết tắt phổ biến trong báo giá Word/Excel
+    "qty": ["so luong", "sl", "s/l", "sl.", "slg", "so lg", "khoi luong"],
     "unit_price": ["don gia"],
     "amount": ["thanh tien", "so tien", "tong tien"],
 }
@@ -293,6 +299,17 @@ def apply_totals(totals: list[tuple[str, int]], pq: ParsedQuote) -> None:
                     pq.declared_subtotal, pq.declared_total = after
             else:
                 pq.declared_subtotal = pq.declared_total = m
+
+    # Hợp đồng nhiều mức thuế suất (vd VAT 8% + VAT 10%) có nhiều dòng VAT.
+    # Chỉ cộng chúng khi tạm tính + tổng các dòng VAT khớp tổng khai báo, còn
+    # dòng đầu đơn lẻ thì không khớp -> tránh cộng trùng khi một dòng VAT bị lặp.
+    vats = [v for k, v in totals if k == "vat" and v]
+    if len(vats) > 1 and pq.declared_subtotal and pq.declared_total:
+        tol = max(1000, pq.declared_total * 0.0005)
+        first_ok = abs(pq.declared_subtotal + vats[0] - pq.declared_total) <= tol
+        sum_ok = abs(pq.declared_subtotal + sum(vats) - pq.declared_total) <= tol
+        if sum_ok and not first_ok:
+            pq.declared_vat = sum(vats)
 
     # Bù chéo khi thiếu hẳn một con số
     if pq.declared_subtotal is None and pq.declared_total is not None and pq.declared_vat is not None:
@@ -687,6 +704,17 @@ def finalize(pq: ParsedQuote) -> ParsedQuote:
         pq.warnings.append(
             f"Tổng các dòng ({calc:,.0f}) lệch tổng khai báo ({subtotal:,.0f})"
         )
+    # Nhiều mức thuế suất: nếu tạm tính + VAT khai báo khớp tổng khai báo thì dữ liệu
+    # nhất quán, dùng thuế suất hiệu dụng thay vì nhân một mức với toàn bộ tạm tính.
+    if (
+        pq.declared_vat
+        and subtotal
+        and pq.declared_total
+        and abs(subtotal + pq.declared_vat - pq.declared_total) <= max(1000, pq.declared_total * 0.0005)
+    ):
+        effective = round(pq.declared_vat / subtotal, 4)
+        if pq.tax_rate and abs(effective - pq.tax_rate) > 0.0005:
+            pq.tax_rate = effective
     if pq.declared_vat is not None and subtotal and pq.tax_rate:
         expected = round(subtotal * pq.tax_rate)
         if abs(expected - pq.declared_vat) > max(1000, expected * 0.01):

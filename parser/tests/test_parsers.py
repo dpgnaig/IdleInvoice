@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import pathlib
 
 import pytest
@@ -16,10 +17,17 @@ from app import text_utils as tu
 
 FIX = pathlib.Path(__file__).parent / "fixtures"
 # File mẫu đầy đủ nằm ở thư mục sample/ của repo (dùng kiểm thử thủ công).
-SAMPLE = FIX.parent.parent.parent / "sample"
+SAMPLE = pathlib.Path(
+    os.environ.get("IDLEINVOICE_SAMPLE_DIR") or (FIX.parent.parent.parent / "sample")
+)
 
 
 def sample(name: str) -> pathlib.Path:
+    """Tìm file mẫu: thư mục IDLEINVOICE_SAMPLE_DIR trước, rồi sample/ của repo, rồi tests/fixtures."""
+    for base in (SAMPLE, FIX.parent.parent.parent / "sample", FIX):
+        p = base / name
+        if p.exists():
+            return p
     return SAMPLE / name
 
 
@@ -193,7 +201,7 @@ pytestmark_sample = pytest.mark.skipif(not SAMPLE.exists(), reason="không có t
 def test_sample_tong_dong_hang_khop_voi_tong_khai_bao(name):
     """Các dòng hàng cộng lại phải bằng tổng trước VAT ghi trên file."""
     p = parser_for(name)
-    pq = p.parse((SAMPLE / name).read_bytes(), name)
+    pq = p.parse(sample(name).read_bytes(), name)
     assert pq.lines, f"{name}: không đọc được dòng hàng nào"
     calc = sum((l.qty or 0) * (l.unit_price or 0) for l in pq.lines)
     if pq.declared_subtotal is not None:
@@ -216,7 +224,7 @@ def test_sample_tong_dong_hang_khop_voi_tong_khai_bao(name):
 )
 def test_sample_pdf_khong_nhan_doi_dong(name):
     """PDF vừa có bảng vừa có text: mỗi dòng hàng chỉ xuất hiện một lần."""
-    pq = PdfTableParser().parse((SAMPLE / name).read_bytes(), name)
+    pq = PdfTableParser().parse(sample(name).read_bytes(), name)
     keys = [(l.name.split("\n")[0].strip().lower(), l.qty, l.unit_price) for l in pq.lines]
     assert len(keys) == len(set(keys)), f"{name}: có dòng bị lặp {keys}"
 
@@ -225,7 +233,7 @@ def test_sample_pdf_khong_nhan_doi_dong(name):
 def test_sample_docx_tach_duoc_thong_so_ky_thuat():
     """Word: cột Hãng/Model và các dòng mô tả phải vào đúng dòng hàng."""
     pq = DocxTableParser().parse(
-        (SAMPLE / "1. 260630_SEEN-QM_OBL Jaeger-Ký.docx").read_bytes(),
+        sample("1. 260630_SEEN-QM_OBL Jaeger-Ký.docx").read_bytes(),
         "bg.docx",
     )
     assert pq.lines
@@ -239,7 +247,7 @@ def test_sample_docx_tach_duoc_thong_so_ky_thuat():
 def test_sample_docx_lay_ngay_lap_hop_dong():
     """Hợp đồng trích 3 luật có 3 ngày khác nhau -> phải lấy ngày "Hôm nay"."""
     pq = DocxTableParser().parse(
-        (SAMPLE / "171126_QM-NDT_TT- HDC.docx").read_bytes(),
+        sample("171126_QM-NDT_TT- HDC.docx").read_bytes(),
         "bg.docx",
     )
     assert pq.quote_date == "2026-11-17"

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/sonner';
-import { Bot, ScrollText, Shield } from 'lucide-react';
+import { Bot, KeyRound, ScrollText, Shield, Trash2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { endpoints } from '@/lib/endpoints';
 import AiSettingsPage, { fetchAiProviders } from '@/pages/ai-settings';
@@ -15,6 +15,10 @@ import { formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { NativeSelect } from '@/components/ui/native-select';
+import { Dialog, DialogFooter } from '@/components/ui/dialog';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Input } from '@/components/ui/input';
+import { Field } from '@/components/ui/label';
 
 interface AdminUser {
   id: number;
@@ -91,6 +95,31 @@ export default function AdminPage() {
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
 
+  const [pwUser, setPwUser] = useState<AdminUser | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [delUser, setDelUser] = useState<AdminUser | null>(null);
+
+  const resetPw = useMutation({
+    mutationFn: async ({ id, password }: { id: number; password: string }) =>
+      api.post(endpoints.admin.resetPassword(id), { password }),
+    onSuccess: () => {
+      toast.success('Đã đặt lại mật khẩu');
+      setPwUser(null);
+      setNewPassword('');
+    },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const remove = useMutation({
+    mutationFn: async (id: number) => api.delete(endpoints.admin.user(id)),
+    onSuccess: () => {
+      toast.success('Đã xóa người dùng');
+      setDelUser(null);
+      void qc.invalidateQueries({ queryKey: ['admin-users'] });
+    },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
   const userColumns: Column<AdminUser>[] = [
     { key: 'name', header: 'Họ tên', render: (r) => <span className="font-medium">{r.fullName}</span> },
     { key: 'email', width: '260px', header: 'Email', render: (r) => <span className="text-muted-foreground">{r.email}</span> },
@@ -106,7 +135,7 @@ export default function AdminPage() {
     },
     { key: 'createdAt', width: '130px', header: 'Ngày tạo', render: (r) => formatDate(r.createdAt) },
     {
-      key: 'actions', width: '200px',
+      key: 'actions', width: '260px',
       header: '',
       align: 'right',
       render: (r) => (
@@ -136,6 +165,24 @@ export default function AdminPage() {
             <option value="accountant">Kế toán</option>
             <option value="admin">Quản trị</option>
           </NativeSelect>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Đổi mật khẩu"
+            title="Đổi mật khẩu"
+            onClick={() => { setNewPassword(''); setPwUser(r); }}
+          >
+            <KeyRound className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-label="Xóa người dùng"
+            title="Xóa người dùng"
+            onClick={() => setDelUser(r)}
+          >
+            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+          </Button>
         </div>
       ),
     },
@@ -184,6 +231,57 @@ export default function AdminPage() {
           empty={<EmptyState title="Không có người dùng" />}
         />
       )}
+
+      <Dialog
+        open={pwUser !== null}
+        onOpenChange={(v) => { if (!v) setPwUser(null); }}
+        title="Đổi mật khẩu"
+        description={pwUser ? `Đặt mật khẩu mới cho ${pwUser.fullName} (${pwUser.email}). Người dùng sẽ bị đăng xuất khỏi mọi phiên.` : undefined}
+        className="max-w-md"
+      >
+        <form
+          className="grid gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (pwUser) resetPw.mutate({ id: pwUser.id, password: newPassword });
+          }}
+        >
+          <Field
+            label="Mật khẩu mới"
+            htmlFor="admin-new-password"
+            hint="Tối thiểu 8 ký tự"
+            error={newPassword.length > 0 && newPassword.length < 8 ? 'Mật khẩu phải có ít nhất 8 ký tự' : undefined}
+          >
+            <Input
+              id="admin-new-password"
+              type="password"
+              autoComplete="new-password"
+              autoFocus
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+          </Field>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPwUser(null)}>
+              Hủy
+            </Button>
+            <Button type="submit" disabled={newPassword.length < 8 || resetPw.isPending}>
+              Lưu mật khẩu
+            </Button>
+          </DialogFooter>
+        </form>
+      </Dialog>
+
+      <ConfirmDialog
+        open={delUser !== null}
+        onOpenChange={(v) => { if (!v) setDelUser(null); }}
+        title="Xóa người dùng"
+        description={delUser ? `Xóa tài khoản ${delUser.fullName} (${delUser.email})? Hành động này không thể hoàn tác. Báo giá, hóa đơn và nhật ký do người này tạo vẫn được giữ lại.` : ''}
+        confirmLabel="Xóa"
+        destructive
+        loading={remove.isPending}
+        onConfirm={async () => { if (delUser) await remove.mutateAsync(delUser.id).catch(() => undefined); }}
+      />
 
       {tab === 'logs' && (
         <DataTable

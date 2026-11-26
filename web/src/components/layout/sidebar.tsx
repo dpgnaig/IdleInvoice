@@ -44,7 +44,8 @@ export function Sidebar({
   const location = useLocation();
   const [appearanceOpen, setAppearanceOpen] = useState(false);
 
-  const content = (
+  // Ngăn kéo mobile luôn hiện đầy đủ nhãn (collapsed=false), dù sidebar desktop đang thu gọn.
+  const renderContent = (collapsed: boolean) => (
     <div className="flex h-full flex-col">
       <div className={cn('flex items-center gap-2.5 px-4 py-5', collapsed && 'justify-center px-2')}>
         <img
@@ -153,7 +154,7 @@ export function Sidebar({
         animate={{ width: collapsed ? 76 : 248 }}
         transition={{ type: 'spring', stiffness: 320, damping: 34 }}
       >
-        {content}
+        {renderContent(collapsed)}
       </motion.aside>
 
       <AnimatePresence>
@@ -173,7 +174,7 @@ export function Sidebar({
               exit={{ x: -280 }}
               transition={{ type: 'spring', stiffness: 320, damping: 34 }}
             >
-              {content}
+              {renderContent(false)}
             </motion.aside>
           </>
         )}

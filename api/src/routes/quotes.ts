@@ -30,8 +30,8 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024, files: 50 },
   fileFilter: (_req, file, cb) => {
-    const ok = /\.(pdf|xlsx|xls|docx)$/i.test(file.originalname);
-    if (!ok) return cb(new Error('Chỉ chấp nhận file .pdf, .xlsx, .xls, .docx'));
+    const ok = /\.(pdf|xlsx|xls|docx?)$/i.test(file.originalname);
+    if (!ok) return cb(new Error('Chỉ chấp nhận file .pdf, .xlsx, .xls, .doc, .docx'));
     cb(null, true);
   },
 });
@@ -46,13 +46,14 @@ function mimeFor(name: string): string {
   const n = name.toLowerCase();
   if (n.endsWith('.pdf')) return 'application/pdf';
   if (n.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (n.endsWith('.doc')) return 'application/msword';
   if (n.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   return 'application/vnd.ms-excel';
 }
 
 /** Lưu file với tên ngẫu nhiên (không tin tên gốc). */
 function storeFile(buffer: Buffer, originalName: string, fileHash: string): string {
-  const ext = (/\.(pdf|xlsx|xls|docx)$/i.exec(originalName)?.[1] ?? 'bin').toLowerCase();
+  const ext = (/\.(pdf|xlsx|xls|docx?)$/i.exec(originalName)?.[1] ?? 'bin').toLowerCase();
   const stored = join(uploadDir(), `${fileHash}.${ext}`);
   if (!existsSync(stored)) writeFileSync(stored, buffer);
   return stored;
@@ -478,7 +479,7 @@ quotesRouter.get(
     if (!file) throw notFound('Không tìm thấy file báo giá');
     const abs = pathResolve(file.storedPath);
     if (!existsSync(abs)) throw notFound('File gốc không còn trên đĩa');
-    if (!/\.(xlsx|xls|docx)$/i.test(file.originalName)) {
+    if (!/\.(xlsx|xls|docx?)$/i.test(file.originalName)) {
       throw badRequest('Chỉ xem trước được file Excel và Word');
     }
     const preview = await previewWithPython(

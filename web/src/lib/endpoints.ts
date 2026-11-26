@@ -53,6 +53,7 @@ export const endpoints = {
   admin: {
     users: '/admin/users',
     user: (id: number) => `/admin/users/${id}`,
+    resetPassword: (id: number) => `/admin/users/${id}/reset-password`,
     auditLogs: '/admin/audit-logs',
     aiProviders: {
       list: '/admin/ai-providers',

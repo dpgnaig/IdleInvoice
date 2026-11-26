@@ -85,13 +85,52 @@ def _extract_power_kw(*texts: str) -> float | None:
     return None
 
 
+def _literal_prefix(a: str, b: str) -> bool:
+    """Một mã là tiền tố của mã kia theo ĐÚNG dạng viết (giữ dấu gạch ngang).
+
+    Ký tự ngay sau phần tiền tố không được là chữ số, để "hd-270" không khớp
+    nhầm "hd-2700". Hậu tố chữ/ký hiệu ("(tq)", "bgkhau", "-0.75kw") thì được.
+    """
+    if not a or not b:
+        return False
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    if not long_.startswith(short):
+        return False
+    rest = long_[len(short):]
+    return not rest or not rest[0].isdigit()
+
+
+def _glued_digit_extension(short_norm: str, long_raw: str) -> bool:
+    """Mã dài có kéo dài mã ngắn bằng chữ số DÍNH LIỀN không?
+
+    `short_norm` là mã ngắn đã chuẩn hóa (chỉ chữ/số), `long_raw` là mã dài giữ
+    nguyên dấu phân cách. "hd270" với "hd-2700" -> True (số 0 dính liền);
+    "lt040" với "lt-040-1.5kw" -> False (có dấu '-' ngăn cách phần công suất).
+    """
+    if not short_norm or not short_norm[-1].isdigit():
+        return False
+    count = 0
+    for i, ch in enumerate(long_raw):
+        if re.fullmatch(r"[a-z0-9]", ch):
+            count += 1
+            if count == len(short_norm):
+                nxt = long_raw[i + 1 : i + 2]
+                return nxt.isdigit()
+    return False
+
+
 def _code_score(line_model: str, product_code: str) -> float:
     """Điểm khớp mã hàng trong [0, 1].
 
-    Trùng khớp tuyệt đối chỉ khi mã (sau khi bỏ khoảng trắng) giống hệt nhau —
-    "HD-270" ≠ "HD270". Mã cùng gốc nhưng khác biến thể ("LT-050" so với
-    "LT-050-0.75KW") chỉ được điểm cao, KHÔNG phải 1.0, để thông số kỹ thuật
-    còn phân định biến thể đúng.
+    Thang điểm (giữ nguyên dạng viết của model, gồm cả dấu gạch ngang):
+      - giống hệt sau khi bỏ khoảng trắng            -> 1.0   ("HD-270" = "HD-270")
+      - cùng dạng viết, là tiền tố của mã kia         -> 0.97  ("HD-270" ~ "HD-270(TQ)")
+      - chỉ khớp sau khi bỏ ký tự đặc biệt (tiền tố)  -> ≤ 0.9  ("HD-270" ~ "HD270")
+      - như trên nhưng bị kéo dài bằng chữ số dính liền -> ≤ 0.6  ("HD-270" ~ "HD-2700")
+      - còn lại                                       -> ≤ 0.7
+    "HD-270" ≠ "HD270": mã viết đúng dạng của báo giá luôn đứng trên mã chỉ
+    giống sau khi chuẩn hóa. Mã cùng gốc nhưng khác biến thể ("LT-050" so với
+    "LT-050-0.75KW") không bao giờ được 1.0, để thông số kỹ thuật còn phân định.
     """
     raw_a = re.sub(r"\s+", "", tu.norm(line_model or ""))
     raw_b = re.sub(r"\s+", "", tu.norm(product_code or ""))
@@ -103,10 +142,35 @@ def _code_score(line_model: str, product_code: str) -> float:
         return 1.0
     ratio = fuzz.ratio(a, b) / 100.0
     partial = fuzz.partial_ratio(a, b) / 100.0
+    if _literal_prefix(raw_a, raw_b):
+        return 0.97
     prefix = b.startswith(a) or a.startswith(b)
     if prefix:
-        return round(min(0.95, max(ratio, partial) * 0.95), 4)
+        if a != b:
+            short_n, long_raw = (a, raw_b) if len(a) <= len(b) else (b, raw_a)
+            if _glued_digit_extension(short_n, long_raw):
+                # "HD-270" so với "HD-2700": hai model khác nhau, không phải
+                # cùng một mã viết khác dấu -> thấp hơn hẳn "HD270".
+                return round(min(0.6, max(ratio, partial) * 0.6), 4)
+        return round(min(0.9, max(ratio, partial) * 0.9), 4)
     return round(min(0.7, max(ratio, partial) * 0.7), 4)
+
+
+def _model_in_name(line_model: str, product_name: str) -> bool:
+    """Model báo giá xuất hiện NGUYÊN VẸN trong tên hàng (khi cột mã là mã nội bộ).
+
+    Ví dụ model "HJW 600-400-3" nằm trong tên "Bình chứa clo ... HJW 600-400-3"
+    (mã nội bộ "Binh500"). Giữ dấu gạch ngang; ký tự ngay trước/sau phải không
+    phải chữ/số và phần sau không được là "-xxx" (tránh nhầm "HD-270" với
+    "HD-2700" hay "HD-270-0.75kw"). Model quá ngắn/không có chữ số bị bỏ qua.
+    """
+    model = tu.norm(line_model or "").strip()
+    name = tu.norm(product_name or "")
+    if len(model) < 4 or not any(ch.isdigit() for ch in model) or not name:
+        return False
+    parts = [re.escape(p) for p in re.findall(r"[a-z]+|\d+|[^a-z\d\s]", model)]
+    pattern = r"(?<![a-z0-9])" + r"\s*".join(parts) + r"(?![a-z0-9])(?!-[a-z0-9])"
+    return re.search(pattern, name) is not None
 
 
 def _text_score(line_name: str, line_spec: str, product_name: str) -> float:
@@ -163,6 +227,11 @@ def product_candidates(
         scored = []
         for p in products:
             cs = _code_score(str(line.get("model", "")), str(p.get("code", "")))
+            # Chỉ khi cột mã KHÔNG liên quan model (mã nội bộ như "Binh500"). Nếu mã đã
+            # khớp một phần (vd "LT-040-1.5KW" với model "LT-040") thì để thông số
+            # (công suất...) phân định biến thể, không nâng tất cả lên 1.0.
+            if cs < 0.9 and _model_in_name(str(line.get("model", "")), str(p.get("name", ""))):
+                cs = 1.0
             ts = _text_score(
                 str(line.get("name", "")),
                 str(line.get("spec", "")),

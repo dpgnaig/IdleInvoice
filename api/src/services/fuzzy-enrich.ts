@@ -38,6 +38,12 @@ export interface FuzzyResult {
 /** Ngưỡng "khớp chắc" — bảo thủ để không tự gắn sai. */
 const CUSTOMER_CONFIDENT = 0.85;
 
+/** Điểm mã tối thiểu để tự gắn hàng hóa có model (> 0.9 = loại biến thể chỉ khác dấu). */
+const MODEL_CODE_CONFIDENT = 0.95;
+
+/** Mã trùng khít dạng viết (codeScore = 1.0). */
+const EXACT_CODE = 0.999;
+
 function customerConfident(c: FuzzyProductCandidate | undefined): boolean {
   return false; // (không dùng) — giữ chỗ cho tương lai nếu cần
 }
@@ -55,9 +61,16 @@ function lineConfident(cands: FuzzyProductCandidate[], hasModel: boolean): boole
   const best = cands[0];
   if (!best) return false;
   const runner = cands[1];
+  // Mã trùng khít dạng viết là tín hiệu mạnh nhất: chọn luôn, trừ khi có >1 mã trùng khít.
+  if (hasModel && (best.codeScore ?? 0) >= EXACT_CODE && (runner?.codeScore ?? 0) < EXACT_CODE) return true;
   const tied = runner != null && best.score - runner.score < 0.05;
   if (tied) return false;
-  if (hasModel) return best.score >= 0.85;
+  if (hasModel) {
+    // Mã phải trùng đúng dạng viết (1.0) hoặc là biến thể hậu tố cùng dạng (~0.97).
+    // "HD-270" ~ "HD270" (chỉ khác ký tự đặc biệt, <= 0.9) chỉ là gợi ý để người dùng chọn.
+    if ((best.codeScore ?? 0) < MODEL_CODE_CONFIDENT) return false;
+    return best.score >= 0.85;
+  }
   return best.score >= 0.72;
 }
 
@@ -139,7 +152,8 @@ export async function fuzzyEnrich(
       name: c.name,
       unit: c.unit,
     }));
-    const alreadyMatched = lineMatches[i]?.status === 'matched';
+    const existing = lineMatches[i];
+    const alreadyMatched = existing?.status === 'matched';
     if (alreadyMatched) return; // tất định đã chắc, không cần ghi đè
     const best = cands[0]!;
     const hasModel = Boolean(pq.lines[i]?.model);
@@ -149,6 +163,20 @@ export async function fuzzyEnrich(
         product: { id: best.id, code: best.code, name: best.name, unit: best.unit },
       };
       result.resolvedLines += 1;
+    } else if (existing) {
+      // Không đủ chắc để tự gắn: đưa ứng viên điểm rapidfuzz cao nhất lên đầu danh sách
+      // người dùng/AI chọn (sửa tại chỗ vì buildDraft dùng chính các đối tượng này).
+      const top = cands.slice(0, 5).map((c) => ({
+        id: c.id,
+        code: c.code,
+        name: c.name,
+        unit: c.unit,
+        score: c.score,
+        reason: `Tương tự ${Math.round(c.score * 100)}%`,
+      }));
+      const topIds = new Set(top.map((c) => c.id));
+      const rest = (existing.candidates ?? []).filter((c) => !topIds.has(c.id));
+      existing.candidates = [...top, ...rest].slice(0, 8);
     }
   });
 

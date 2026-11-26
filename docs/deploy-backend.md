@@ -55,6 +55,41 @@ sudo apt update
 sudo apt install -y caddy
 ```
 
+## 2b. Oracle Cloud: mở cổng 80/443 (chỉ làm nếu dùng Oracle)
+
+Image Ubuntu của Oracle có sẵn rule iptables chặn mọi cổng ngoài 22: chain INPUT có `REJECT` ở cuối. Cần mở cổng ở **cả hai nơi**:
+1. Console Oracle: VCN → Security List (hoặc NSG) của instance, thêm ingress TCP 80 và 443 từ `0.0.0.0/0`.
+2. iptables trên server (bên dưới).
+
+Trên server, xem số dòng của rule `REJECT`:
+
+```bash
+sudo iptables -L INPUT --line-numbers -n
+```
+
+Các lệnh dưới đây giả định `REJECT` ở dòng 5. Nếu số khác, thay `5` bằng số dòng đó. Rule phải nằm **trước** REJECT. Lệnh `-C` kiểm tra trước để chạy lại không bị lặp rule:
+
+```bash
+sudo iptables -C INPUT -m state --state NEW -p tcp --dport 443 -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 5 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+sudo iptables -C INPUT -m state --state NEW -p tcp --dport 80 -j ACCEPT 2>/dev/null || sudo iptables -I INPUT 5 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+sudo iptables -L INPUT --line-numbers -n
+```
+
+Kết quả phải có `dpt:80` và `dpt:443` đứng trước `REJECT`. Lưu để không mất khi reboot:
+
+```bash
+sudo DEBIAN_FRONTEND=noninteractive apt install -y iptables-persistent
+sudo netfilter-persistent save
+```
+
+Khi Caddy đã chạy (mục 6), kiểm tra từ máy Windows:
+
+```powershell
+Test-NetConnection IP_CUA_BAN -Port 443
+```
+
+Kết quả `TcpTestSucceeded : True` là thông. Trước đó, `False` là bình thường.
+
 ## 3. Build ở máy Windows local, chỉ đẩy artifact lên server
 
 **Phần api (`api/`):**
@@ -92,6 +127,9 @@ pip install --no-cache-dir -r requirements.txt
 ```
 `--no-cache-dir` tiết kiệm RAM/disk khi pip build gói (rapidfuzz có thể cần biên dịch nếu
 không có wheel sẵn — với swap 4GB vẫn đủ chạy).
+
+**File `.doc` cũ** — parser đọc trực tiếp bằng Python thuần (`olefile`, đã nằm trong
+`requirements.txt`), **không cần cài LibreOffice/`soffice`** trên Ubuntu.
 
 ## 4. File `.env` trên server (`/opt/idleinvoice/api/.env`)
 
@@ -167,7 +205,7 @@ Caddy tự xin và gia hạn chứng chỉ Let's Encrypt, không cần cài/cấ
 
 `/etc/caddy/Caddyfile`:
 ```
-api.tenmiencuaban.com {
+apiquoteflow.duckdns.org {
 	request_body {
 		max_size 15MB
 	}
@@ -182,10 +220,12 @@ sudo systemctl reload caddy
 sudo systemctl status caddy
 ```
 
-Trỏ DNS A record của `api.tenmiencuaban.com` về IP server trước khi reload — Caddy chỉ xin
+Trỏ DNS A record của `apiquoteflow.duckdns.org` về IP server trước khi reload — Caddy chỉ xin
 được chứng chỉ khi domain đã phân giải đúng.
 
 ## 7. Firewall
+
+Trên Oracle, `ufw allow 80/443` **không mở được cổng** vì các chain của ufw nằm sau rule `REJECT` (xem mục 2b). Mở 80/443 bằng iptables ở mục 2b.
 
 ```bash
 sudo ufw allow OpenSSH
@@ -205,12 +245,12 @@ FE gọi API bằng đường dẫn tương đối `/api/...` (mục 0), nên ch
 ```json
 {
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://api.tenmiencuaban.com/api/:path*" }
+    { "source": "/api/:path*", "destination": "https://apiquoteflow.duckdns.org/api/:path*" }
   ]
 }
 ```
 
-Đổi `api.tenmiencuaban.com` thành domain backend thật rồi push — Vercel tự áp dụng rewrite
+Đổi `apiquoteflow.duckdns.org` thành domain backend thật rồi push — Vercel tự áp dụng rewrite
 này, không cần set thêm biến môi trường nào ở Vercel project settings.
 
 ## 9. Khi có bản cập nhật code

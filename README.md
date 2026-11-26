@@ -50,6 +50,8 @@ set INTERNAL_KEY=local-internal-key          # macOS/Linux: export ...
 uvicorn app.main:app --reload --port 8001
 ```
 
+> File `.doc` (Word 97-2003) được parser đọc bằng Python thuần (`olefile`), **không cần LibreOffice**.
+
 **2. API**
 
 ```bash

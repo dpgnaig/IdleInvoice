@@ -86,6 +86,12 @@
   }
 }
 
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
 /* Toàn bộ control dùng component shadcn trong src/components/ui; chỉ còn tiện ích dùng chung. */
 @layer components {
   .skeleton {
@@ -95,7 +101,8 @@
     content: '';
     @apply absolute inset-0;
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
-    animation: shimmer 1.4s infinite;
+    transform: translateX(-100%);
+    animation: shimmer 1.4s ease-in-out infinite;
   }
   .table-wrap {
     @apply overflow-x-auto rounded-xl border bg-card shadow-sm;

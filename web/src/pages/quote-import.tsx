@@ -15,6 +15,7 @@ import { Combobox, type ComboOption } from '@/components/ui/combobox';
 import { CountUpMoney } from '@/components/ui/count-up';
 import { Dialog, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { ScrollToTop } from '@/components/ui/scroll-to-top';
 import { Input } from '@/components/ui/input';
 import { Field } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -210,8 +211,8 @@ export default function QuoteImportPage() {
 
   const handleFiles = useCallback(async (files: FileList | null) => {
     if (!files?.length) return;
-    const arr = Array.from(files).filter((f) => /\.(pdf|xls|xlsx|docx)$/i.test(f.name));
-    if (!arr.length) { toast.error('Chỉ hỗ trợ file .pdf, .xlsx, .xls, .docx'); return; }
+    const arr = Array.from(files).filter((f) => /\.(pdf|xls|xlsx|docx?)$/i.test(f.name));
+    if (!arr.length) { toast.error('Chỉ hỗ trợ file .pdf, .xlsx, .xls, .doc, .docx'); return; }
     const fd = new FormData();
     arr.forEach((f) => fd.append('files', f));
     setUploading(true);
@@ -386,7 +387,7 @@ export default function QuoteImportPage() {
           ref={inputRef}
           type="file"
           multiple
-          accept=".pdf,.xlsx,.xls,.docx"
+          accept=".pdf,.xlsx,.xls,.doc,.docx"
           className="sr-only"
           onChange={(e) => { void handleFiles(e.target.files); e.target.value = ''; }}
         />
@@ -516,6 +517,8 @@ export default function QuoteImportPage() {
           toast.success(`Đã thêm khách hàng ${c.name}`);
         }}
       />
+
+      <ScrollToTop />
     </div>
   );
 }
@@ -532,10 +535,12 @@ function toEditable(d: Draft): EditableDraft {
   }
   const cm = d.customerMatch!;
   const lines = (d.lines ?? []).map((l, i) => {
-    // Chỉ tự điền khi ghép CHẮC CHẮN (model trùng khít / alias).
-    // Với `candidate` (nhiều mã cùng khớp, vd "LT - 040" -> LT-040-0.75/1.1/1.5/2.2kw)
-    // thì để trống cho người dùng chọn — giá mỗi mã khác nhau, đoán bừa là sai tiền.
-    const certain = l.productMatch.status === 'matched' ? l.productMatch.product ?? null : null;
+    // `matched`: dùng sản phẩm đã ghép chắc chắn. `candidate` (nhiều mã cùng khớp, vd
+    // "LT - 040" -> LT-040-0.75/1.1/1.5/2.2kw): tự chọn gợi ý đầu tiên (điểm cao nhất),
+    // các gợi ý còn lại hiện bên dưới ô để người dùng đổi.
+    const certain = l.productMatch.status === 'matched'
+      ? l.productMatch.product ?? null
+      : (l.productMatch.candidates ?? [])[0] ?? null;
     return {
       key: `${i}-${l.parsed.line_no}`,
       parsed: l.parsed,
@@ -1527,10 +1532,10 @@ function DraftCard({
                               )}
                             </dl>
                           )}
-                          {l.candidates.length > 0 && l.productId !== l.candidates[0]!.id && (
+                          {l.candidates.filter((c) => c.id !== l.productId).length > 0 && (
                             <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                              <span className="text-[11px] text-muted-foreground">Gợi ý:</span>
-                              {l.candidates.slice(0, 3).map((c) => (
+                              <span className="text-[11px] text-muted-foreground">Gợi ý khác:</span>
+                              {l.candidates.filter((c) => c.id !== l.productId).slice(0, 3).map((c) => (
                                 <button
                                   key={c.id}
                                   type="button"

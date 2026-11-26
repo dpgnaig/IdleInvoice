@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from .base import QuoteParser
-from .docx_parser import DocxTableParser, read_docx
+from .docx_parser import DocParser, DocxTableParser, read_docx, read_word
 from .excel_parser import ExcelTableParser
 from .models import (
     HealthResponse,
@@ -27,7 +27,7 @@ MAX_FILE_MB = float(os.environ.get("MAX_FILE_MB", "10"))
 INTERNAL_KEY = os.environ.get("INTERNAL_KEY", "")
 LLM_FALLBACK_ENABLED = os.environ.get("LLM_FALLBACK_ENABLED", "false").lower() == "true"
 
-PARSERS: list[QuoteParser] = [ExcelTableParser(), DocxTableParser(), PdfTableParser()]
+PARSERS: list[QuoteParser] = [ExcelTableParser(), DocxTableParser(), DocParser(), PdfTableParser()]
 
 # Xem trước chỉ để đọc bằng mắt — chặn kích thước để trình duyệt không treo
 PREVIEW_MAX_ROWS = 1200
@@ -86,9 +86,7 @@ async def parse(
 
     parser = next((p for p in PARSERS if p.can_parse(name)), None)
     if parser is None:
-        hint = " Chỉ hỗ trợ .pdf, .xlsx, .xls, .docx — file .doc cũ cần lưu lại thành .docx."
-        if name.lower().endswith(".doc"):
-            hint = " File .doc (Word 97-2003) chưa hỗ trợ — mở bằng Word rồi lưu thành .docx."
+        hint = " Chỉ hỗ trợ .pdf, .xlsx, .xls, .doc, .docx."
         return JSONResponse(
             status_code=422,
             content={
@@ -160,8 +158,8 @@ async def preview(
                 for sheet_name, grid in tr.read_sheets_excel(data, name)
             ]
             return PreviewDoc(kind="excel", sheets=sheets)
-        if lower.endswith(".docx"):
-            paragraphs, grids = read_docx(data)
+        if lower.endswith((".docx", ".doc")):
+            paragraphs, grids = read_word(data) if lower.endswith(".doc") else read_docx(data)
             return PreviewDoc(
                 kind="word",
                 sheets=[

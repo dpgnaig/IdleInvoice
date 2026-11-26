@@ -127,7 +127,7 @@ export function Header({ onMenu, onCommand }: { onMenu: () => void; onCommand: (
           </ol>
         </nav>
 
-        <div className="relative ml-auto hidden w-full max-w-xs sm:block">
+        <div className="relative hidden w-full max-w-xs sm:ml-auto sm:block">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
@@ -179,7 +179,7 @@ export function Header({ onMenu, onCommand }: { onMenu: () => void; onCommand: (
           </AnimatePresence>
         </div>
 
-        <Button type="button" variant="ghost" onClick={onCommand} className="px-2" aria-label="Mở bảng lệnh">
+        <Button type="button" variant="ghost" onClick={onCommand} className="ml-auto px-2 sm:ml-0" aria-label="Mở bảng lệnh">
           <Search className="sm:hidden" />
           <span className="hidden text-xs text-muted-foreground sm:inline">Ctrl K</span>
         </Button>
