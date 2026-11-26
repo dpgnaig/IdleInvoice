@@ -60,6 +60,12 @@ e2e/playwright-report/
 e2e/blob-report/
 e2e/screenshots/
 
+# ---------- Build output & dữ liệu mẫu mới ----------
+# deploy/out/ do deploy/package.ps1 sinh ra.
+# sample/: ignore chỉ chặn file MỚI; các file đã track trước đó vẫn được git theo dõi.
+deploy/out/
+sample/
+
 # ---------- Log ----------
 *.log
 
