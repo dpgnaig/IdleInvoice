@@ -23,7 +23,8 @@ Copy-Item "$root/parser/requirements.txt" "$out/parser/"
 
 Copy-Item "$PSScriptRoot/systemd/*.service" "$out/systemd/"
 Copy-Item "$PSScriptRoot/Caddyfile.tmpl" "$out/"
-Copy-Item "$PSScriptRoot/deploy.sh", "$PSScriptRoot/install.sh" "$out/"
+Copy-Item "$PSScriptRoot/deploy.sh", "$PSScriptRoot/install.sh", "$PSScriptRoot/update.sh" "$out/"
 
 Write-Host "Package ready: $out"
-Write-Host "Deploy with: bash deploy/out/deploy.sh user@SERVER_IP https://your-app.vercel.app [path/to/key.pem]"
+Write-Host "First deploy:  bash deploy/out/deploy.sh user@SERVER_IP https://your-app.vercel.app [path/to/key.pem]"
+Write-Host "Quick update:  bash deploy/out/update.sh user@SERVER_IP [path/to/key.pem]"
