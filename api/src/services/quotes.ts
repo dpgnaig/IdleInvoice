@@ -277,7 +277,7 @@ function finalizeDraft(draft: DraftQuote, customerTaxIn: string | null): DraftQu
       const recent = getRawDb()
         .prepare(
           `SELECT product_name, unit_price FROM sales_history
-           WHERE customer_tax_code = ? AND product_code = ? AND (invoice_date IS NULL OR invoice_date >= ?)
+           WHERE customer_tax_code = ? AND code_key(product_code) = code_key(?) AND (invoice_date IS NULL OR invoice_date >= ?)
            ORDER BY invoice_date DESC, id DESC`,
         )
         .all(customerTax, code, since) as Array<{ product_name: string; unit_price: number }>;
@@ -309,7 +309,7 @@ function recentQtyOf(customerTax: string, productCode: string, since: string): n
   const rows = getRawDb()
     .prepare(
       `SELECT DISTINCT qty FROM sales_history
-       WHERE customer_tax_code = ? AND product_code = ? AND (invoice_date IS NULL OR invoice_date >= ?)
+       WHERE customer_tax_code = ? AND code_key(product_code) = code_key(?) AND (invoice_date IS NULL OR invoice_date >= ?)
        LIMIT 5`,
     )
     .all(customerTax, productCode, since) as Array<{ qty: number }>;
@@ -447,7 +447,7 @@ export function duplicateCheck(invoiceId: number): string[] {
     const rows = getRawDb()
       .prepare(
         `SELECT COUNT(*) AS n FROM sales_history
-         WHERE customer_tax_code = ? AND product_code = ? AND qty = ? AND unit_price = ? AND (invoice_date IS NULL OR invoice_date >= ?)`,
+         WHERE customer_tax_code = ? AND code_key(product_code) = code_key(?) AND qty = ? AND unit_price = ? AND (invoice_date IS NULL OR invoice_date >= ?)`,
       )
       .get(cust.taxCode, p.code, l.qty, l.unitPrice, since) as { n: number };
     if (rows.n > 0) {
@@ -461,7 +461,7 @@ export function lastPrice(customerTaxCode: string, productCode: string) {
   const row = getRawDb()
     .prepare(
       `SELECT unit_price, invoice_date, invoice_no FROM sales_history
-       WHERE customer_tax_code = ? AND product_code = ?
+       WHERE customer_tax_code = ? AND code_key(product_code) = code_key(?)
        ORDER BY invoice_date DESC, id DESC LIMIT 1`,
     )
     .get(customerTaxCode, productCode) as { unit_price: number; invoice_date: string; invoice_no: string } | undefined;

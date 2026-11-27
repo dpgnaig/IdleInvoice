@@ -621,6 +621,25 @@ describe('tìm + ghép mã hàng theo model', () => {
   });
 });
 
+describe('lịch sử bán hàng: so khớp mã hàng theo code_key', () => {
+  it('lastPrice tìm được dòng lịch sử dù mã khác hoa/thường hoặc dấu câu', async () => {
+    const { lastPrice } = await import('../services/quotes.js');
+    const now = new Date().toISOString();
+    getRawDb()
+      .prepare(
+        `INSERT INTO sales_history
+         (created_at, updated_at, invoice_no, invoice_date, customer_tax_code, product_code, product_name, unit, qty, unit_price, tax_rate)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(now, now, 'HD-CK-1', '2026-11-01', '0100000001', 'GONGKEPDAUBINH', 'Gông kẹp đầu bình', 'Cái', 5, 120000, 0.08);
+
+    expect(lastPrice('0100000001', 'GONGKEPDAUBINH')?.unit_price).toBe(120000);
+    expect(lastPrice('0100000001', 'gongkepdaubinh')?.unit_price).toBe(120000);
+    expect(lastPrice('0100000001', 'gongkep-daubinh')?.unit_price).toBe(120000);
+    expect(lastPrice('0100000002', 'gongkepdaubinh')).toBeNull();
+  });
+});
+
 describe('ghép tên công ty + ứng viên cho AI', () => {
   beforeAll(async () => {
     await request(app)
