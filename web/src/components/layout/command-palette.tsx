@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, Upload, FileText, Users, Package, History, Shield,
+  LayoutDashboard, Upload, FileText, Users, Package, History, Receipt, Shield,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
@@ -27,6 +27,7 @@ const ITEMS = [
   { to: '/customers', label: 'Khách hàng', icon: Users, adminOnly: false },
   { to: '/products', label: 'Sản phẩm', icon: Package, adminOnly: false },
   { to: '/quotes', label: 'Lịch sử báo giá', icon: History, adminOnly: false },
+  { to: '/sales-history', label: 'Lịch sử bán hàng', icon: Receipt, adminOnly: false },
   { to: '/admin', label: 'Quản trị', icon: Shield, adminOnly: true },
 ];
 

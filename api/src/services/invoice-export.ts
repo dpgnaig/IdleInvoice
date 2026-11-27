@@ -31,12 +31,12 @@ const HEADER = [
   'Donvitinh', 'Soluong', 'Dongia', 'ThueGTGT', 'CCCD', 'MaQHNS',
 ];
 
-function taxCell(v: number | string): { value: number | string; format?: string } {
-  if (v === 'KCT') return { value: 'KCT' };
-  if (v === 'KKKNT') return { value: 'KKKNT' };
+/** ThueGTGT xuất dạng chữ ("8%", "KCT", "KKKNT"), không phải số. */
+function taxText(v: number | string): string {
+  if (v === 'KCT' || v === 'KKKNT') return v;
   const n = Number(v);
-  if (n >= 1) return { value: n / 100, format: '0%' }; // phòng khi lưu 8
-  return { value: n, format: '0%' };
+  const pct = n >= 1 ? n : n * 100; // phòng khi lưu 8 thay vì 0.08
+  return `${Math.round(pct * 100) / 100}%`;
 }
 
 /** Ghi sheet "mẫu hđ" đúng mẫu import: dòng 1 là header; mỗi dòng hàng lặp lại
@@ -51,7 +51,7 @@ export async function exportInvoicesXlsx(invs: ExportInvoice[], res: Response): 
     inv.lines.forEach((l) => {
       const row = ws.addRow([
         inv.customer.taxCode,
-        inv.customer.buyerName || inv.customer.name,
+        inv.customer.buyerName,
         inv.customer.name,
         inv.customer.address,
         inv.customer.email,
@@ -77,11 +77,10 @@ export async function exportInvoicesXlsx(invs: ExportInvoice[], res: Response): 
       // Số lượng / đơn giá định dạng #,##0
       row.getCell(14).numFmt = '#,##0';
       row.getCell(15).numFmt = '#,##0';
-      // Thuế: ghi số 0.08 nhưng hiển thị 8%
-      const t = taxCell(l.taxRate);
+      // Thuế: ghi dạng chữ "8%" (ô text)
       const c16 = row.getCell(16);
-      c16.value = t.value;
-      if (t.format) c16.numFmt = t.format;
+      c16.value = taxText(l.taxRate);
+      c16.numFmt = '@';
     });
     if (invIdx < invs.length - 1) ws.addRow(new Array(HEADER.length).fill(null)); // 1 dòng trắng
   });

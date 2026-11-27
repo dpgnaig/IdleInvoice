@@ -190,6 +190,7 @@ def grid_lines(grid: list[list[str]], header_idx: int, mapping: dict[str, int]) 
     brand_i = mapping.get("brand")
     origin_i = mapping.get("origin")
     desc_i = mapping.get("desc")
+    line_no_i = mapping.get("line_no")
 
     lines: list[QuoteLine] = []
     totals: list[tuple[str, int]] = []
@@ -236,6 +237,7 @@ def grid_lines(grid: list[list[str]], header_idx: int, mapping: dict[str, int]) 
                 brand=brand,
                 origin=origin,
                 spec_text=spec_text,
+                item_no=_item_no(row, line_no_i),
                 confidence="high" if (qty is not None and price is not None) else "medium",
             )
             lines.append(current)
@@ -316,6 +318,53 @@ def apply_totals(totals: list[tuple[str, int]], pq: ParsedQuote) -> None:
         pq.declared_subtotal = pq.declared_total - pq.declared_vat
     if pq.declared_vat is None and pq.declared_total and pq.declared_subtotal:
         pq.declared_vat = pq.declared_total - pq.declared_subtotal
+
+
+ITEM_NO_RE = re.compile(r"^\d+(?:\.\d+)*$")
+# "THUẾ VAT 8% (mục 1; 2; 3)" / "VAT 10% (mục 4.1 ; 5.1)" / "THUẾ 8% ( MỤC 1,5,6,7,8)"
+# / "Thuế GTGT 10% (mục 2,3,4)" (đã bỏ dấu, chữ thường). Chỉ cần một trong các từ khoá
+# thue / vat / gtgt đứng trước mức %, rồi tới danh sách mục trong ngoặc.
+TAX_GROUP_RE = re.compile(
+    r"\b(?:thue|vat|gtgt)\b[^%\d()]{0,20}?(\d{1,2}(?:[.,]\d+)?)\s*%\s*\(([^)]*)\)"
+)
+
+
+def _item_no(row: list[str], idx: int | None) -> str:
+    v = _cell(row, idx if idx is not None else 0)
+    return v if ITEM_NO_RE.match(v) else ""
+
+
+def _expand_items(spec: str) -> list[str]:
+    """"mục 1; 2; 4.1" / "mục 1-3" -> ["1", "2", "4.1"] / ["1", "2", "3"]."""
+    spec = re.sub(r"\b(?:muc|stt|tt|dong|hang)\b", " ", spec)
+    items: list[str] = []
+    for part in re.split(r"[;,]|\bva\b", spec):
+        part = part.strip()
+        m = re.fullmatch(r"(\d+)\s*(?:-|den)\s*(\d+)", part)
+        if m and int(m.group(1)) <= int(m.group(2)) <= int(m.group(1)) + 200:
+            items += [str(i) for i in range(int(m.group(1)), int(m.group(2)) + 1)]
+        elif ITEM_NO_RE.match(part):
+            items.append(part)
+    return items
+
+
+def apply_line_taxes(pq: ParsedQuote, text: str) -> None:
+    """Gắn thuế suất riêng cho từng dòng từ các dòng thuế dạng "THUẾ VAT 8% (mục …)".
+
+    Hợp đồng nhiều mức thuế liệt kê mục nào chịu mức nào ngay ở dòng thuế cuối
+    bảng. Chỉ gắn cho dòng có số thứ tự được nêu đích danh; dòng còn lại giữ
+    None để dùng thuế suất chung.
+    """
+    rates: dict[str, float] = {}
+    for m in TAX_GROUP_RE.finditer(tu.norm(text)):
+        rate = float(m.group(1).replace(",", ".")) / 100
+        for item in _expand_items(m.group(2)):
+            rates.setdefault(item, rate)
+    if not rates:
+        return
+    for l in pq.lines:
+        if l.item_no in rates:
+            l.tax_rate = rates[l.item_no]
 
 
 def read_grids_excel(data: bytes, filename: str) -> list[list[list[str]]]:
@@ -676,6 +725,30 @@ def _reconcile_line(l: QuoteLine, pq: ParsedQuote) -> None:
             l.confidence = "medium"
 
 
+def _check_line_taxes(pq: ParsedQuote) -> None:
+    """Đối chiếu VAT khai báo với VAT tính theo thuế suất của từng dòng."""
+    default = pq.tax_rate
+    vat = 0.0
+    by_rate: dict[float, float] = {}
+    for l in pq.lines:
+        base = l.amount if l.amount else round((l.qty or 0) * (l.unit_price or 0))
+        rate = l.tax_rate if l.tax_rate is not None else default
+        if l.tax_rate is None:
+            pq.warnings.append(
+                f"Dòng #{l.line_no} \"{l.name[:30]}\" không có thuế suất riêng trong báo giá"
+                + (f", dùng {rate * 100:g}%" if rate else "")
+            )
+        else:
+            by_rate[rate] = by_rate.get(rate, 0) + base
+        vat += base * (rate or 0)
+    if by_rate:
+        pq.tax_rate = max(by_rate, key=lambda r: by_rate[r])
+    if pq.declared_vat is not None and abs(vat - pq.declared_vat) > max(1000, vat * 0.01):
+        pq.warnings.append(
+            f"VAT tính theo thuế suất từng dòng ({vat:,.0f}) lệch VAT khai báo ({pq.declared_vat:,.0f})"
+        )
+
+
 def finalize(pq: ParsedQuote) -> ParsedQuote:
     """Tính thuế suất, kiểm tra lệch tổng, sinh cảnh báo."""
     pq.lines = _dedupe_lines(pq.lines)
@@ -706,21 +779,25 @@ def finalize(pq: ParsedQuote) -> ParsedQuote:
         )
     # Nhiều mức thuế suất: nếu tạm tính + VAT khai báo khớp tổng khai báo thì dữ liệu
     # nhất quán, dùng thuế suất hiệu dụng thay vì nhân một mức với toàn bộ tạm tính.
-    if (
-        pq.declared_vat
-        and subtotal
-        and pq.declared_total
-        and abs(subtotal + pq.declared_vat - pq.declared_total) <= max(1000, pq.declared_total * 0.0005)
-    ):
-        effective = round(pq.declared_vat / subtotal, 4)
-        if pq.tax_rate and abs(effective - pq.tax_rate) > 0.0005:
-            pq.tax_rate = effective
-    if pq.declared_vat is not None and subtotal and pq.tax_rate:
-        expected = round(subtotal * pq.tax_rate)
-        if abs(expected - pq.declared_vat) > max(1000, expected * 0.01):
-            pq.warnings.append(
-                f"VAT tính lại ({expected:,.0f}) lệch VAT khai báo ({pq.declared_vat:,.0f})"
-            )
+    if any(l.tax_rate is not None for l in pq.lines):
+        # Báo giá đã nêu thuế suất theo từng mục: dùng đúng các mức đó, không suy ra mức hiệu dụng.
+        _check_line_taxes(pq)
+    else:
+        if (
+            pq.declared_vat
+            and subtotal
+            and pq.declared_total
+            and abs(subtotal + pq.declared_vat - pq.declared_total) <= max(1000, pq.declared_total * 0.0005)
+        ):
+            effective = round(pq.declared_vat / subtotal, 4)
+            if pq.tax_rate and abs(effective - pq.tax_rate) > 0.0005:
+                pq.tax_rate = effective
+        if pq.declared_vat is not None and subtotal and pq.tax_rate:
+            expected = round(subtotal * pq.tax_rate)
+            if abs(expected - pq.declared_vat) > max(1000, expected * 0.01):
+                pq.warnings.append(
+                    f"VAT tính lại ({expected:,.0f}) lệch VAT khai báo ({pq.declared_vat:,.0f})"
+                )
     if not pq.buyer_tax_code:
         pq.warnings.append("Không tìm thấy mã số thuế người mua")
     if len(pq.lines) == 0:

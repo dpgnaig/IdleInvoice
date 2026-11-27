@@ -13,6 +13,9 @@ export interface ParsedLine {
   brand: string;
   origin: string;
   spec_text: string;
+  item_no?: string;
+  /** Thuế suất riêng của dòng (0.08); null/undefined = dùng thuế suất chung. */
+  tax_rate?: number | null;
   confidence: 'high' | 'medium' | 'low';
 }
 
@@ -138,6 +141,34 @@ export async function previewWithPython(
     return (await res.json()) as PreviewDoc;
   } catch (err) {
     logger.warn({ err, filename }, 'Parser không trả dữ liệu xem trước');
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Chuyển .xls -> .xlsx và .doc -> .docx (parser) để trình xem trên trình duyệt render được. */
+export async function convertWithPython(
+  buffer: Buffer,
+  filename: string,
+  mime = 'application/octet-stream',
+): Promise<Buffer | null> {
+  const env = getEnv();
+  const form = new FormData();
+  form.append('file', new Blob([new Uint8Array(buffer)], { type: mime }), filename);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch(`${env.PARSER_URL}/convert`, {
+      method: 'POST',
+      body: form,
+      headers: { 'X-Internal-Key': env.INTERNAL_KEY },
+      signal: controller.signal,
+    });
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer());
+  } catch (err) {
+    logger.warn({ err, filename }, 'Parser không chuyển được file để xem trước');
     return null;
   } finally {
     clearTimeout(timeout);

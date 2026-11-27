@@ -23,7 +23,9 @@ import { invoicesRouter } from './routes/invoices.js';
 import { adminRouter, customersAdminExtras } from './routes/admin.js';
 import { aiProvidersRouter } from './routes/ai-providers.js';
 import { historyRouter } from './routes/history.js';
+import { salesHistoryRouter } from './routes/sales-history.js';
 import { purgeExpiredTokens } from './services/tokens.js';
+import { startUploadCleanup } from './services/upload-cleanup.js';
 
 export function createApp() {
   const env = getEnv();
@@ -70,6 +72,7 @@ export function createApp() {
   app.use('/api/quotes', requireAuth, quotesRouter);
   app.use('/api/invoices', requireAuth, invoicesRouter);
   app.use('/api/history', requireAuth, historyRouter);
+  app.use('/api/sales-history', requireAuth, salesHistoryRouter);
   app.use('/api/export', requireAuth, exportRouter);
   app.use('/api/admin/ai-providers', requireAuth, aiProvidersRouter);
   app.use('/api/admin', requireAuth, adminRouter);
@@ -94,6 +97,7 @@ const isMain = process.argv[1]?.endsWith('index.ts') || process.argv[1]?.endsWit
 if (isMain) {
   const env = getEnv();
   const app = createApp();
+  startUploadCleanup();
   app.listen(env.PORT, () => {
     logger.info(`API chạy tại http://localhost:${env.PORT}`);
   });

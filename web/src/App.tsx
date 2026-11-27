@@ -15,6 +15,7 @@ import ProductsPage from '@/pages/products';
 import QuoteImportPage from '@/pages/quote-import';
 import QuotesPage from '@/pages/quotes';
 import QuoteDetailPage from '@/pages/quote-detail';
+import SalesHistoryPage from '@/pages/sales-history';
 import InvoicesPage from '@/pages/invoices';
 import InvoiceDetailPage from '@/pages/invoice-detail';
 import AdminPage from '@/pages/admin';
@@ -88,6 +89,7 @@ function InnerRoutes() {
         <Route path="/quotes/import" element={<QuoteImportPage />} />
         <Route path="/quotes" element={<QuotesPage />} />
         <Route path="/quotes/:id" element={<QuoteDetailPage />} />
+        <Route path="/sales-history" element={<SalesHistoryPage />} />
         <Route path="/invoices" element={<InvoicesPage />} />
         <Route path="/invoices/:id" element={<InvoiceDetailPage />} />
         <Route path="/customers" element={<CustomersPage />} />

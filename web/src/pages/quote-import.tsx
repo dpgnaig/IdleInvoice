@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from '@/components/ui/sonner';
 import {
   AlertTriangle, Bot, Building2, Check, CheckCircle2, FileText, FileUp, Info,
-  Loader2, Package, Plus, SearchCheck, Trash2, UploadCloud, X, XCircle,
+  Loader2, Package, Pencil, Plus, SearchCheck, Trash2, UploadCloud, X, XCircle,
 } from 'lucide-react';
 import { DatePicker } from '@/components/ui/date-picker';
 import { api, apiErrorMessage } from '@/lib/api';
@@ -23,6 +23,9 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/empty-state';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { renderAsync as renderDocx } from 'docx-preview';
+import jsPreviewExcel from '@js-preview/excel';
+import '@js-preview/excel/lib/index.css';
 
 interface PreviewSheet { name: string; rows: string[][] }
 interface PreviewDoc { kind: 'excel' | 'word' | 'pdf' | string; sheets: PreviewSheet[]; paragraphs: string[] }
@@ -317,6 +320,12 @@ export default function QuoteImportPage() {
   useEffect(() => {
     if (!showProcessing && viewTab === 'processing') setViewTab('all');
   }, [showProcessing, viewTab]);
+
+  // Thẻ chờ chỉ được render ở tab "Đang xử lý" nên chỉ ở đó mới gọi được onFinished để dọn `finishing`.
+  // Đang đứng ở tab khác thì không ai xem hiệu ứng chạy nốt -> dọn luôn để tab "Đang xử lý" tự ẩn.
+  useEffect(() => {
+    if (viewTab !== 'processing' && finishing.length > 0) setFinishing([]);
+  }, [viewTab, finishing.length]);
 
   const TABS = [
     { key: 'processing' as const, label: 'Đang xử lý', count: processingFiles.length, show: showProcessing },
@@ -613,6 +622,8 @@ function CustomerField({
   onChange: (patch: Partial<EditableDraft>) => void;
   onNewCustomer: () => void;
 }) {
+  const qc = useQueryClient();
+  const [editOpen, setEditOpen] = useState(false);
   const tax = normalizeTax(draft.buyerTaxCode);
 
   // Nạp toàn bộ danh mục một lần; combobox tự lọc + cuộn ảo phía client.
@@ -736,6 +747,18 @@ function CustomerField({
             >
               <Plus />
             </Button>
+            {draft.customerId !== null && (
+              <Button
+                variant="outline"
+                size="icon"
+                className="shrink-0"
+                onClick={() => setEditOpen(true)}
+                title="Sửa thông tin khách hàng đang chọn (cập nhật cả danh mục Khách hàng)"
+                aria-label="Sửa khách hàng"
+              >
+                <Pencil />
+              </Button>
+            )}
           </div>
           {draft.customerId === null ? (
             <p className="flex items-center gap-1 text-xs text-destructive">
@@ -810,7 +833,221 @@ function CustomerField({
         />
         Ghi nhớ tên trên báo giá cho khách hàng này
       </label>
+
+      {draft.customerId !== null && (
+        <EditCustomerDialog
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          customerId={draft.customerId}
+          onSaved={(c) => {
+            onChange({ customer: c, customerId: c.id, buyerTaxCode: c.taxCode });
+            for (const key of ['customer-options', 'customers', 'customers-all', 'customer', 'invoices', 'invoice', 'quotes', 'quote']) {
+              void qc.invalidateQueries({ queryKey: [key] });
+            }
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+interface CustomerFull {
+  id: number;
+  taxCode: string;
+  name: string;
+  address?: string | null;
+  email?: string | null;
+  buyerName?: string | null;
+  idCard?: string | null;
+  bankAccount?: string | null;
+  budgetUnitCode?: string | null;
+  source?: 'IMPORT' | 'MANUAL' | 'TAX_LOOKUP' | null;
+}
+
+/** Sửa khách hàng đang chọn ngay trên thẻ báo giá — ghi thẳng vào bản ghi dùng chung ở mục Khách hàng. */
+function EditCustomerDialog({
+  open, onOpenChange, customerId, onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  customerId: number;
+  onSaved: (c: CustomerLite) => void;
+}) {
+  // PUT ghi đè toàn bộ trường -> lấy bản đầy đủ để không làm mất idCard, bankAccount...
+  const full = useQuery({
+    queryKey: ['customer', customerId],
+    enabled: open,
+    gcTime: 0,
+    queryFn: async () => (await api.get(endpoints.customers.byId(customerId))).data as CustomerFull,
+  });
+  const [taxCode, setTaxCode] = useState('');
+  const [name, setName] = useState('');
+  const [address, setAddress] = useState('');
+  const [email, setEmail] = useState('');
+  const [buyerName, setBuyerName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || !full.data) return;
+    setTaxCode(full.data.taxCode);
+    setName(full.data.name);
+    setAddress(full.data.address ?? '');
+    setEmail(full.data.email ?? '');
+    setBuyerName(full.data.buyerName ?? '');
+    setNote(null);
+  }, [open, full.data]);
+
+  const save = async () => {
+    if (!full.data) return;
+    if (!taxCode.trim() || !name.trim()) {
+      setNote('Cần nhập mã số thuế và tên đơn vị.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data } = await api.put(endpoints.customers.byId(customerId), {
+        taxCode: taxCode.trim(),
+        name: name.trim(),
+        address: address.trim(),
+        email: email.trim(),
+        buyerName: buyerName.trim(),
+        idCard: full.data.idCard ?? '',
+        bankAccount: full.data.bankAccount ?? '',
+        budgetUnitCode: full.data.budgetUnitCode ?? '',
+        source: full.data.source ?? 'MANUAL',
+      });
+      onSaved({ id: data.id, name: data.name, taxCode: data.taxCode });
+      onOpenChange(false);
+      toast.success('Đã cập nhật khách hàng');
+    } catch (e) {
+      setNote(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Sửa khách hàng"
+      description="Thay đổi áp dụng cho bản ghi khách hàng dùng chung, không chỉ riêng báo giá này."
+    >
+      {full.isLoading ? (
+        <div className="flex justify-center p-6"><Loader2 className="animate-spin" /></div>
+      ) : (
+        <div className="grid gap-4">
+          <Field label="Tên đơn vị *" htmlFor="ec-name">
+            <Input id="ec-name" value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Field label="Mã số thuế *" htmlFor="ec-mst">
+            <Input id="ec-mst" className="font-mono" value={taxCode} onChange={(e) => setTaxCode(e.target.value)} />
+          </Field>
+          <Field label="Địa chỉ" htmlFor="ec-addr">
+            <Input id="ec-addr" value={address} onChange={(e) => setAddress(e.target.value)} />
+          </Field>
+          <div className="grid items-start gap-4 sm:grid-cols-2">
+            <Field label="Người mua" htmlFor="ec-buyer">
+              <Input id="ec-buyer" value={buyerName} onChange={(e) => setBuyerName(e.target.value)} />
+            </Field>
+            <Field label="Email" htmlFor="ec-email">
+              <Input id="ec-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            </Field>
+          </div>
+          {note && (
+            <p className="flex items-start gap-1.5 rounded-lg bg-muted px-2.5 py-2 text-xs text-muted-foreground">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {note}
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Hủy</Button>
+            <Button type="button" onClick={() => void save()} disabled={saving || !full.data}>
+              {saving && <Loader2 className="animate-spin" />} Lưu
+            </Button>
+          </DialogFooter>
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
+/** Sửa mã/tên/ĐVT của hàng hóa đang ghép ngay trên dòng báo giá — ghi vào bản ghi dùng chung ở mục Hàng hóa. */
+function EditProductDialog({
+  open, onOpenChange, product, onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  product: MatchCandidate;
+  onSaved: (p: MatchCandidate) => void;
+}) {
+  const [code, setCode] = useState(product.code);
+  const [name, setName] = useState(product.name);
+  const [unit, setUnit] = useState(product.unit);
+  const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setCode(product.code);
+    setName(product.name);
+    setUnit(product.unit);
+    setNote(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, product.id]);
+
+  const save = async () => {
+    if (!code.trim() || !name.trim() || !unit.trim()) {
+      setNote('Cần nhập mã hàng, tên hàng và đơn vị tính.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data } = await api.put(endpoints.products.byId(product.id), {
+        code: code.trim(),
+        name: name.trim(),
+        unit: unit.trim(),
+      });
+      onSaved({ id: data.id, code: data.code, name: data.name, unit: data.unit });
+      onOpenChange(false);
+      toast.success('Đã cập nhật hàng hóa');
+    } catch (e) {
+      setNote(apiErrorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Sửa hàng hóa"
+      description="Thay đổi áp dụng cho bản ghi hàng hóa dùng chung, không chỉ riêng dòng này."
+    >
+      <div className="grid gap-4">
+        <Field label="Mã hàng *" htmlFor="ep-code">
+          <Input id="ep-code" className="font-mono" value={code} onChange={(e) => setCode(e.target.value)} />
+        </Field>
+        <Field label="Tên hàng hóa *" htmlFor="ep-name">
+          <Input id="ep-name" value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Đơn vị tính *" htmlFor="ep-unit">
+          <Input id="ep-unit" value={unit} onChange={(e) => setUnit(e.target.value)} />
+        </Field>
+        {note && (
+          <p className="flex items-start gap-1.5 rounded-lg bg-muted px-2.5 py-2 text-xs text-muted-foreground">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {note}
+          </p>
+        )}
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Hủy</Button>
+          <Button type="button" onClick={() => void save()} disabled={saving}>
+            {saving && <Loader2 className="animate-spin" />} Lưu
+          </Button>
+        </DialogFooter>
+      </div>
+    </Dialog>
   );
 }
 
@@ -989,6 +1226,7 @@ function ProductField({
   // State riêng cho dialog tạo mã hàng — KHÔNG dùng chung với ô tìm kiếm,
   // nếu không thì gõ tìm kiếm sẽ bật dialog.
   const [createOpen, setCreateOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   // Nạp toàn bộ danh mục hàng hóa một lần; combobox tự lọc + cuộn ảo phía client.
   const all = useQuery({
@@ -1025,8 +1263,10 @@ function ProductField({
     !all.isLoading &&
     !products.some((p) => norm(p.code).includes(modelKey) || norm(p.name).includes(modelKey));
   // Ô chọn hiển thị TÊN hàng hóa; dòng mã đã khớp hiện riêng bên dưới để đối chiếu.
-  const selectedCode = line.product?.code ?? '';
-  const selectedUnit = line.product?.unit ?? '';
+  // Lấy từ danh mục mới nhất để dòng khác dùng cùng mã hàng cũng thấy giá trị vừa sửa
+  const current = products.find((p) => p.id === line.productId) ?? line.product;
+  const selectedCode = current?.code ?? '';
+  const selectedUnit = current?.unit ?? '';
 
   return (
     <div className="min-w-0">
@@ -1049,6 +1289,16 @@ function ProductField({
               <span className="truncate font-mono text-muted-foreground" title={selectedCode}>
                 {selectedCode}{selectedUnit ? ` · ${selectedUnit}` : ''}
               </span>
+            )}
+            {current && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                title="Sửa mã, tên, ĐVT của hàng hóa này (cập nhật cả danh mục Hàng hóa)"
+                onClick={() => setEditOpen(true)}
+              >
+                <Pencil className="h-3 w-3" /> Sửa
+              </button>
             )}
             {line.parsed.model && (
               <label className="flex items-center gap-1.5 text-muted-foreground">
@@ -1088,6 +1338,19 @@ function ProductField({
             onPick(p);
             void qc.invalidateQueries({ queryKey: ['products'] });
             void qc.invalidateQueries({ queryKey: ['product-options'] });
+          }}
+        />
+      )}
+      {current && (
+        <EditProductDialog
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          product={current}
+          onSaved={(p) => {
+            onPick(p);
+            for (const key of ['product-options', 'products', 'invoices', 'invoice', 'quotes', 'quote']) {
+              void qc.invalidateQueries({ queryKey: [key] });
+            }
           }}
         />
       )}
@@ -1360,19 +1623,35 @@ function DraftCard({
   const [previewOpen, setPreviewOpen] = useState(false);
   const [sheetPreview, setSheetPreview] = useState<PreviewDoc | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [fileBlob, setFileBlob] = useState<Blob | null>(null);
   const isPdf = /\.pdf$/i.test(draft.fileName);
+  // .doc/.xls cũ được API chuyển sang .docx/.xlsx (qua /quotes/view) nên dùng chung trình xem với bản mới
+  const isDocx = /\.docx?$/i.test(draft.fileName);
+  const isXlsx = /\.xlsx?$/i.test(draft.fileName);
+  const isLegacy = /\.(doc|xls)$/i.test(draft.fileName);
 
   const openOriginal = async () => {
     try {
       setPreviewOpen(true);
-      if (previewUrl || sheetPreview) return;
+      if (previewUrl || sheetPreview || fileBlob) return;
       if (isPdf) {
         const res = await api.get(endpoints.quotes.file(draft.fileHash), { responseType: 'blob' });
         setPreviewUrl(URL.createObjectURL(res.data as Blob));
         return;
       }
-      // Excel/Word: lấy dữ liệu thô từ parser, hiển thị như trình xem
       setPreviewLoading(true);
+      if (isDocx || isXlsx) {
+        // Tải file (bản đã chuyển nếu là .doc/.xls) rồi render đúng định dạng ngay trên trình duyệt
+        const url = isLegacy ? endpoints.quotes.view(draft.fileHash) : endpoints.quotes.file(draft.fileHash);
+        try {
+          const res = await api.get(url, { responseType: 'blob' });
+          setFileBlob(res.data as Blob);
+          return;
+        } catch (e) {
+          if (!isLegacy) throw e;
+          // Chuyển đổi lỗi: lùi về bản xem tự dựng từ dữ liệu thô của parser
+        }
+      }
       const res = await api.get(endpoints.quotes.preview(draft.fileHash));
       setSheetPreview(res.data as PreviewDoc);
     } catch (e) {
@@ -1545,7 +1824,7 @@ function DraftCard({
                   <Plus /> Thêm dòng
                 </Button>
               </div>
-              <Table containerClassName="overflow-x-auto" className="min-w-[820px]">
+              <Table containerClassName="overflow-x-auto" className="min-w-[820px] table-fixed">
                   <TableHeader>
                     <TableRow className="bg-transparent hover:bg-transparent">
                       <TableHead className="w-10 px-3 text-center text-[11px] uppercase tracking-wide">#</TableHead>
@@ -1568,7 +1847,7 @@ function DraftCard({
                         )}
                       >
                         <TableCell className="px-3 py-3 text-center text-xs tabular-nums leading-8 text-muted-foreground">{i + 1}</TableCell>
-                        <TableCell className="px-3 py-3">
+                        <TableCell className="min-w-0 px-3 py-3">
                           <ProductField
                             id={`prod-${draft.fileHash}-${i}`}
                             line={l}
@@ -1737,7 +2016,7 @@ function DraftCard({
                 </Button>
               )}
             </div>
-            {!previewUrl && !sheetPreview && (
+            {!previewUrl && !sheetPreview && !fileBlob && (
               <p className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 {previewLoading ? 'Đang đọc nội dung file…' : 'Đang tải file…'}
@@ -1751,6 +2030,8 @@ function DraftCard({
               />
             )}
             {sheetPreview && <SheetPreviewDoc doc={sheetPreview} />}
+            {fileBlob && isDocx && <DocxViewer blob={fileBlob} />}
+            {fileBlob && isXlsx && <XlsxViewer blob={fileBlob} />}
           </div>
         </Dialog>
       )}
@@ -1815,6 +2096,57 @@ function SheetPreviewDoc({ doc }: { doc: PreviewDoc }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** Xem file Word (.docx) giống Microsoft Word, chỉ đọc. */
+function DocxViewer({ blob }: { blob: Blob }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let cancelled = false;
+    setError(null);
+    renderDocx(blob, el).catch((e: unknown) => {
+      if (!cancelled) setError(e instanceof Error ? e.message : 'Không hiển thị được file Word');
+    });
+    return () => {
+      cancelled = true;
+      el.innerHTML = '';
+    };
+  }, [blob]);
+  return (
+    <>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      <div ref={ref} className="max-h-[70vh] overflow-auto rounded-lg border bg-muted/30" />
+    </>
+  );
+}
+
+/** Xem file Excel (.xlsx) giống bảng tính, chỉ đọc. */
+function XlsxViewer({ blob }: { blob: Blob }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let cancelled = false;
+    setError(null);
+    const viewer = jsPreviewExcel.init(el, { showContextmenu: false });
+    viewer.preview(blob).catch((e: unknown) => {
+      if (!cancelled) setError(e instanceof Error ? e.message : 'Không hiển thị được file Excel');
+    });
+    return () => {
+      cancelled = true;
+      viewer.destroy();
+    };
+  }, [blob]);
+  return (
+    <>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      <div ref={ref} className="h-[70vh] w-full overflow-hidden rounded-lg border bg-white" />
+    </>
   );
 }
 

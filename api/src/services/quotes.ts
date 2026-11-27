@@ -61,7 +61,7 @@ export function matchQuote(parsed: ParsedQuote): {
     qty: line.qty,
     unitPrice: line.unit_price,
     amount: line.amount,
-    taxRate: defaultTax,
+    taxRate: line.tax_rate != null ? normalizeTax(line.tax_rate) : defaultTax,
   }));
   return { customerMatch, lines, customerTax };
 }

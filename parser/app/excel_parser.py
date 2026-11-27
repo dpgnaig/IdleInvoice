@@ -46,6 +46,7 @@ class ExcelTableParser(QuoteParser):
                 break
         if rate:
             pq.tax_rate = rate
+        tr.apply_line_taxes(pq, "\n".join(tr._sheet_text(g) for g in grids))
         if len(grids) > 1:
             pq.warnings.append("File có nhiều sheet, đã chọn sheet chứa bảng hàng hóa")
         return tr.finalize(pq)

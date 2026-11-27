@@ -8,6 +8,7 @@ import {
   Users,
   Package,
   History,
+  Receipt,
   Shield,
   ChevronsLeft,
   ChevronsRight,
@@ -26,6 +27,7 @@ const NAV = [
   { to: '/customers', label: 'Khách hàng', icon: Users },
   { to: '/products', label: 'Sản phẩm', icon: Package },
   { to: '/quotes', label: 'Lịch sử báo giá', icon: History },
+  { to: '/sales-history', label: 'Lịch sử bán hàng', icon: Receipt },
   { to: '/admin', label: 'Quản trị', icon: Shield, adminOnly: true },
 ];
 

@@ -307,7 +307,7 @@ describe('invoices + export Excel', () => {
     expect(res.body.error).toContain('tham chiếu');
   });
 
-  it('xuất Excel: header đúng, 8% hiển thị 0%, dòng trắng giữa hóa đơn', async () => {
+  it('xuất Excel: header đúng, thuế dạng chữ "8%", Tennguoimua không tự điền tên công ty, dòng trắng giữa hóa đơn', async () => {
     const res = await request(app)
       .post('/api/invoices/export')
       .set('Authorization', `Bearer ${accessToken}`)
@@ -337,8 +337,9 @@ describe('invoices + export Excel', () => {
     expect(row2.getCell(12).value).toBe('1');
     expect(row2.getCell(14).value).toBe(9);
     expect(row2.getCell(15).value).toBe(430000);
-    expect(row2.getCell(16).value).toBe(0.08);
-    expect(row2.getCell(16).numFmt).toBe('0%');
+    expect(row2.getCell(2).value).not.toBe(row2.getCell(3).value);
+    expect(row2.getCell(16).value).toBe('8%');
+    expect(row2.getCell(16).numFmt).toBe('@');
     // hóa đơn 2 ở dòng 4 (dòng 3 trắng)
     const row3 = ws!.getRow(3);
     const row3Values = (row3.values as unknown[]) ?? [];

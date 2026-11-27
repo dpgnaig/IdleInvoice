@@ -4,9 +4,10 @@ import os
 import tempfile
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .base import QuoteParser
+from .converter import DOCX_MIME, XLSX_MIME, doc_to_docx, xls_to_xlsx
 from .docx_parser import DocParser, DocxTableParser, read_docx, read_word
 from .excel_parser import ExcelTableParser
 from .models import (
@@ -173,6 +174,30 @@ async def preview(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"Không đọc được file để xem trước: {str(exc)[:200]}")
     raise HTTPException(status_code=422, detail="Định dạng file không hỗ trợ xem trước")
+
+
+@app.post("/convert")
+async def convert(
+    file: UploadFile = File(...),
+    _auth: None = Depends(check_internal_key),
+) -> Response:
+    """Chuyển .xls -> .xlsx và .doc -> .docx để trình xem trên trình duyệt hiển thị được."""
+    name = file.filename or "upload.bin"
+    data = await file.read()
+    if len(data) > MAX_FILE_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File quá lớn (tối đa {MAX_FILE_MB:g} MB)")
+    if len(data) == 0:
+        raise HTTPException(status_code=400, detail="File rỗng")
+
+    lower = name.lower()
+    try:
+        if lower.endswith(".xls"):
+            return Response(content=xls_to_xlsx(data), media_type=XLSX_MIME)
+        if lower.endswith(".doc"):
+            return Response(content=doc_to_docx(data), media_type=DOCX_MIME)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Không chuyển được file: {str(exc)[:200]}")
+    raise HTTPException(status_code=422, detail="Chỉ chuyển đổi file .xls và .doc")
 
 
 @app.post("/parse-file-path")

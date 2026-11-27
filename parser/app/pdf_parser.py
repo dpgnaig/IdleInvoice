@@ -70,6 +70,8 @@ class PdfTableParser(QuoteParser):
         if rate is not None and rate > 0:
             pq.tax_rate = rate
 
+        tr.apply_line_taxes(pq, full_text)
+
         if not pq.lines:
             pq.warnings.append("Không trích được bảng hàng hóa từ PDF")
         return tr.finalize(pq)

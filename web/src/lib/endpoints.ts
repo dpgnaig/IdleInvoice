@@ -41,7 +41,13 @@ export const endpoints = {
     confirm: '/quotes/confirm',
     file: (fileHash: string) => `/quotes/file/${fileHash}`,
     preview: (fileHash: string) => `/quotes/preview/${fileHash}`,
+    view: (fileHash: string) => `/quotes/view/${fileHash}`,
     deleteBatch: '/quotes/delete-batch',
+  },
+  salesHistory: {
+    list: '/sales-history',
+    import: '/sales-history/import',
+    byId: (id: number) => `/sales-history/${id}`,
   },
   invoices: {
     list: '/invoices',

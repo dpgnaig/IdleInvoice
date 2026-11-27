@@ -12,7 +12,7 @@ import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { normalizeTaxCode } from '../lib/normalize.js';
 import { asyncHandler } from '../middleware/error.js';
-import { parseWithPython, previewWithPython } from '../services/parser-client.js';
+import { convertWithPython, parseWithPython, previewWithPython } from '../services/parser-client.js';
 import { enrichWithAi, type AiEnrichment, type AiFuzzyHints, type LineSuggestion } from '../services/ai-enrich.js';
 import { fuzzyEnrich, type FuzzyResult } from '../services/fuzzy-enrich.js';
 import { createJob, finishJob, getJob, jobView, updateFile } from '../services/quote-jobs.js';
@@ -468,6 +468,36 @@ quotesRouter.get(
     res.setHeader('Content-Type', mime);
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
     createReadStream(abs).pipe(res);
+  }),
+);
+
+/** Bản .docx/.xlsx cho trình xem trên trình duyệt: file .doc/.xls cũ được parser chuyển sang định dạng mới
+ * và lưu cache cạnh file gốc. Đăng ký TRƯỚC /:id. */
+quotesRouter.get(
+  '/view/:hash',
+  asyncHandler(async (req, res) => {
+    const hash = String(req.params.hash);
+    if (!/^[0-9a-f]{64}$/.test(hash)) throw badRequest('Mã file không hợp lệ');
+    const file = db_file(hash);
+    if (!file) throw notFound('Không tìm thấy file báo giá');
+    const abs = pathResolve(file.storedPath);
+    if (!existsSync(abs)) throw notFound('File gốc không còn trên đĩa');
+    const m = /\.(doc|xls)$/i.exec(file.originalName);
+    if (!m) throw badRequest('Chỉ chuyển đổi được file .doc và .xls');
+    const target = m[1]?.toLowerCase() === 'doc' ? 'docx' : 'xlsx';
+    const cached = join(uploadDir(), `${hash}.view.${target}`);
+    if (!existsSync(cached)) {
+      const converted = await convertWithPython(
+        readFileSync(abs),
+        file.originalName,
+        mimeFor(file.originalName),
+      );
+      if (!converted) throw new AppError(502, 'Không chuyển được file để xem trước');
+      writeFileSync(cached, converted);
+    }
+    res.setHeader('Content-Type', mimeFor(`x.${target}`));
+    res.setHeader('Content-Disposition', `inline; filename="${hash}.${target}"`);
+    createReadStream(cached).pipe(res);
   }),
 );
 

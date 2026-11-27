@@ -24,6 +24,8 @@ class QuoteLine(BaseModel):
     brand: str = ""
     origin: str = ""
     spec_text: str = ""
+    item_no: str = ""  # số thứ tự gốc trong báo giá ("4", "4.1")
+    tax_rate: float | None = None  # thuế suất riêng của dòng (0.08); None = dùng thuế suất chung
     confidence: Confidence = "medium"
 
 

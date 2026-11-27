@@ -1,14 +1,20 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/sonner';
-import { AlertTriangle, ArrowLeft, FileText, Loader2, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, FileText, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { api, apiErrorMessage } from '@/lib/api';
 import { endpoints } from '@/lib/endpoints';
 import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Dialog, DialogFooter } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Field } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/empty-state';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { formatDate, formatMoney, formatTaxRate } from '@/lib/utils';
@@ -45,6 +51,14 @@ export default function QuoteDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [editCustomerOpen, setEditCustomerOpen] = useState(false);
+  const [editLine, setEditLine] = useState<QuoteDetail['lines'][number] | null>(null);
+
+  const refreshAfterEdit = () => {
+    for (const key of ['quote', 'quotes', 'customers', 'customer', 'products', 'invoice', 'invoices']) {
+      void qc.invalidateQueries({ queryKey: [key] });
+    }
+  };
 
   const detail = useQuery({
     queryKey: ['quote', quoteId],
@@ -135,7 +149,14 @@ export default function QuoteDetailPage() {
 
         <Card>
           <CardContent className="p-5">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Khách hàng</p>
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Khách hàng</p>
+            {customer && (
+              <Button variant="ghost" size="icon-sm" aria-label="Sửa khách hàng" title="Sửa khách hàng" onClick={() => setEditCustomerOpen(true)}>
+                <Pencil />
+              </Button>
+            )}
+          </div>
           {customer ? (
             <div className="mt-3 grid gap-1.5 text-sm">
               <p className="font-medium">{customer.name}</p>
@@ -168,6 +189,7 @@ export default function QuoteDetailPage() {
                 <TableHead className="w-32 px-4 text-right">Đơn giá</TableHead>
                 <TableHead className="w-20 px-4 text-center">Thuế</TableHead>
                 <TableHead className="w-36 px-4 text-right">Thành tiền</TableHead>
+                <TableHead className="w-12 px-4" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -182,6 +204,11 @@ export default function QuoteDetailPage() {
                   <TableCell className="px-4 py-3 text-center">{formatTaxRate(l.taxRate)}</TableCell>
                   <TableCell className="px-4 py-3 text-right font-medium tabular-nums">
                     {formatMoney(Math.round(l.qty * l.unitPrice))}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-right">
+                    <Button variant="ghost" size="icon-sm" aria-label="Sửa hàng hóa" title="Sửa hàng hóa" onClick={() => setEditLine(l)}>
+                      <Pencil />
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}
@@ -206,6 +233,19 @@ export default function QuoteDetailPage() {
         </div>
       </Card>
 
+      {customer && (
+        <EditCustomerDialog
+          customerId={customer.id}
+          open={editCustomerOpen}
+          onOpenChange={setEditCustomerOpen}
+          onSaved={() => { refreshAfterEdit(); setEditCustomerOpen(false); }}
+        />
+      )}
+      <EditProductDialog
+        line={editLine}
+        onOpenChange={(v) => !v && setEditLine(null)}
+        onSaved={() => { refreshAfterEdit(); setEditLine(null); }}
+      />
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
@@ -217,6 +257,141 @@ export default function QuoteDetailPage() {
         onConfirm={() => remove.mutate()}
       />
     </div>
+  );
+}
+
+const customerSchema = z.object({
+  taxCode: z.string().trim().min(1, 'Vui lòng nhập mã số thuế'),
+  name: z.string().trim().min(1, 'Vui lòng nhập tên đơn vị'),
+  address: z.string().trim(),
+  email: z.union([z.string().trim().email('Email không hợp lệ'), z.literal('')]),
+});
+type CustomerForm = z.infer<typeof customerSchema>;
+
+function EditCustomerDialog({
+  customerId, open, onOpenChange, onSaved,
+}: {
+  customerId: number;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onSaved: () => void;
+}) {
+  // PUT /customers/:id ghi đè toàn bộ trường, nên lấy bản đầy đủ để không làm mất buyerName, idCard...
+  const full = useQuery({
+    queryKey: ['customer', customerId],
+    enabled: open,
+    queryFn: async () => (await api.get<CustomerForm & Record<string, unknown>>(endpoints.customers.byId(customerId))).data,
+  });
+  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<CustomerForm>({
+    resolver: zodResolver(customerSchema),
+  });
+
+  useEffect(() => {
+    if (open && full.data) {
+      reset({
+        taxCode: full.data.taxCode,
+        name: full.data.name,
+        address: full.data.address ?? '',
+        email: full.data.email ?? '',
+      });
+    }
+  }, [open, full.data, reset]);
+
+  const onSubmit = async (values: CustomerForm) => {
+    try {
+      await api.put(endpoints.customers.byId(customerId), { ...full.data, ...values });
+      toast.success('Đã cập nhật khách hàng');
+      onSaved();
+    } catch (err) {
+      toast.error(apiErrorMessage(err));
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange} title="Sửa khách hàng">
+      {full.isLoading ? (
+        <div className="flex justify-center p-6"><Loader2 className="animate-spin" /></div>
+      ) : (
+        <form onSubmit={handleSubmit(onSubmit)} className="grid gap-4">
+          <Field label="Tên đơn vị *" htmlFor="qc-name" error={errors.name?.message}>
+            <Input id="qc-name" {...register('name')} />
+          </Field>
+          <Field label="Mã số thuế *" htmlFor="qc-tax" error={errors.taxCode?.message}>
+            <Input id="qc-tax" className="font-mono" {...register('taxCode')} />
+          </Field>
+          <Field label="Địa chỉ" htmlFor="qc-address" error={errors.address?.message}>
+            <Input id="qc-address" {...register('address')} />
+          </Field>
+          <Field label="Email" htmlFor="qc-email" error={errors.email?.message}>
+            <Input id="qc-email" {...register('email')} />
+          </Field>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Hủy</Button>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting && <Loader2 className="animate-spin" />} Lưu
+            </Button>
+          </DialogFooter>
+        </form>
+      )}
+    </Dialog>
+  );
+}
+
+const productSchema = z.object({
+  code: z.string().trim().min(1, 'Vui lòng nhập mã hàng hóa'),
+  name: z.string().trim().min(1, 'Vui lòng nhập tên hàng hóa'),
+  unit: z.string().trim().min(1, 'Vui lòng nhập đơn vị tính'),
+});
+type ProductForm = z.infer<typeof productSchema>;
+
+function EditProductDialog({
+  line, onOpenChange, onSaved,
+}: {
+  line: QuoteDetail['lines'][number] | null;
+  onOpenChange: (v: boolean) => void;
+  onSaved: () => void;
+}) {
+  const { register, handleSubmit, reset, setError, formState: { errors, isSubmitting } } = useForm<ProductForm>({
+    resolver: zodResolver(productSchema),
+  });
+
+  useEffect(() => {
+    if (line) reset({ code: line.code, name: line.name, unit: line.unit });
+  }, [line, reset]);
+
+  const onSubmit = async (values: ProductForm) => {
+    if (!line) return;
+    try {
+      await api.put(endpoints.products.byId(line.productId), values);
+      toast.success('Đã cập nhật hàng hóa');
+      onSaved();
+    } catch (err) {
+      const msg = apiErrorMessage(err);
+      if (/mã hàng/i.test(msg)) setError('code', { message: msg });
+      toast.error(msg);
+    }
+  };
+
+  return (
+    <Dialog open={Boolean(line)} onOpenChange={onOpenChange} title="Sửa hàng hóa">
+      <form onSubmit={handleSubmit(onSubmit)} className="grid gap-4">
+        <Field label="Mã hàng hóa *" htmlFor="qp-code" error={errors.code?.message}>
+          <Input id="qp-code" className="font-mono" {...register('code')} />
+        </Field>
+        <Field label="Tên hàng hóa *" htmlFor="qp-name" error={errors.name?.message}>
+          <Input id="qp-name" {...register('name')} />
+        </Field>
+        <Field label="Đơn vị tính *" htmlFor="qp-unit" error={errors.unit?.message}>
+          <Input id="qp-unit" {...register('unit')} />
+        </Field>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Hủy</Button>
+          <Button type="submit" disabled={isSubmitting}>
+            {isSubmitting && <Loader2 className="animate-spin" />} Lưu
+          </Button>
+        </DialogFooter>
+      </form>
+    </Dialog>
   );
 }
 
